@@ -1,3 +1,6 @@
+const fs = require('fs');
+const envPath = require('path').join(__dirname, '.env');
+if (fs.existsSync(envPath)) process.loadEnvFile(envPath);
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -112,7 +115,42 @@ app.get('/api/dashboard', (req, res) => {
     res.json({totalSupplies,lowStockCount,totalItems,categoryBreakdown,recentScans,lowStockItems});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
+app.use('/api', require('./care').router);
+app.use('/api', require('./email').router);
+app.use('/api', require('./assistant').router);
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/index.html'));
 });
-app.listen(PORT, () => console.log('MediTrack running on http://localhost:'+PORT));
+function openBrowser(url) {
+  if (!process.env.MEDITRACK_OPEN_BROWSER) return;
+  const { exec } = require('child_process');
+  const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+  exec(cmd, () => {});
+}
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(require('os').networkInterfaces())) {
+    for (const a of list || []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  }
+  return out;
+}
+const server = app.listen(PORT, () => {
+  const url = 'http://localhost:' + PORT;
+  console.log('');
+  console.log('  MediTrack is running!');
+  console.log('  On this computer:  ' + url);
+  for (const ip of lanAddresses()) console.log('  On your phone (same Wi-Fi):  http://' + ip + ':' + PORT);
+  console.log('');
+  console.log('  Keep this window open while you use MediTrack. Close it to stop.');
+  console.log('');
+  openBrowser(url);
+});
+server.on('error', e => {
+  if (e.code === 'EADDRINUSE') {
+    console.log('MediTrack is already running. Opening it in your browser...');
+    openBrowser('http://localhost:' + PORT);
+    setTimeout(() => process.exit(0), 1500);
+  } else {
+    throw e;
+  }
+});
