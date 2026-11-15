@@ -1,22 +1,48 @@
 # MediTrack Design Spec
 
-Status: revision 4. The owner's answers so far are applied:
+## 0. Core design principle (read first)
+
+> **MediTrack must stay very simple.** It is for a tired parent of a medically complex child. Every common task (find a number, send an order, reply to a DME email) must take as few taps as possible. Anything that doesn't serve that goes under Later features.
+
+How the builder applies this:
+- **The rule for MVP:** a feature is in the MVP only if it (a) makes a common task faster, or (b) is needed for safety or privacy. Everything else is in section 5 (Later).
+- **Defaults instead of settings:** pick the sensible default and don't ask. Every setting screen and every extra choice must earn its place.
+- **One obvious button per screen** for the common action, placed in thumb reach. Secondary actions go in a "…" menu.
+- **Never cut for simplicity:** sign-in, hashed secrets, server-side permission checks, AI consent, the stock log, backups.
+
+### Target tap counts (from Home, signed in, patient selected)
+
+| Common task | Target taps | Path |
+|---|---|---|
+| Find a provider's number | **0-1** | Favorites are on Home ("Quick contacts", up to 4). Others: **Care Team** (1) → number is on the card (search box at top if the list is long). |
+| Call a provider | **1-2** (+ the phone's own call confirm) | Home quick contact **Call** (1). Others: **Care Team** (1) → **Call** (2). |
+| Send a doctor's order (already in the app) to a DME company | **4** | **Care Team** (1) → DME card **Send order** (2) → draft opens with the latest order attached → **Send** (3) → confirm (4). |
+| Scan a new order and send it | **≤ 7** | Home **Scan document** (1) → shutter per page (2) → **Done** (3) → **Save** (purpose "Order", date today prefilled) (4) → **Send to [last DME used]** (5) → **Send** (6) → confirm (7). |
+| Reply to a DME email | **3-4** | Notification "a reply arrived", or the Home "Waiting on you" card (1) → **Draft reply** (assistant) or **Reply** (blank) (2) → **Send** (3) → confirm (4). |
+| Approve an assistant draft | **3** | Home "Waiting on you" draft (1) → **Send** (2) → confirm (3). |
+| Log supply use | **2** | **Supplies** (1) → **−1** quick button on the item card (2). Or by barcode: Home **Scan** (1) → camera finds code → **Used** (2). In photo mode (no secure connection) add 1-2 taps for the phone's camera. |
+| Restock | **2** | Same as logging use, with **+** (enter amount) or **Restocked**. |
+| Check stock | **0-1** | "Running low" is on Home (0). Full list: **Supplies** (1). |
+
+Every Used/Restocked tap saves immediately and shows a 5-second **Undo** toast, instead of a confirm dialog. Sending email always has one confirm, because it can't be undone.
+
+---
+
+Status: revision 5. It applies the simplicity principle and adds **Documents**.
+
+Owner decisions kept from earlier rounds:
 - phone-first design
-- sign in with a PIN or a password
-- the AI sees patient data only with per-patient consent
-- no doctor login for now
-- several patients per user, with an agency-ready data model
-- people create their own accounts
-- push notifications
+- PIN or password
+- per-patient AI consent
+- no doctor login yet
+- several patients per user
+- self-created accounts
+- one patient admin per patient
+- nurses get the same access as family by default
+- push notifications for low stock and assistant updates
+- live updates across screens
 
-New in revision 4:
-- **each patient account has exactly one patient admin**: whoever created the profile
-- the patient admin sets **per-person permissions** and may delegate "manage people"
-- people join by invite **or by request**
-- admin can be transferred, with a recovery path
-- every screen updates **live**
-
-The remaining questions are in "Open decisions" at the end.
+Remaining questions are at the end.
 Scope: evolve the existing app. Do not rewrite it. Reuse existing components, endpoints and tables wherever possible.
 
 ---
@@ -32,786 +58,625 @@ Scope: evolve the existing app. Do not rewrite it. Reuse existing components, en
 **Screens today (9 tabs in a scrolling top bar, visible after setup)**
 | Tab | What it does |
 |---|---|
-| Setup wizard (first run only) | 3 steps: family info (child, DOB, parent contact, address, insurance/Medicaid IDs, diagnoses, equipment) → add care team (manual form or NPI registry search) → done. "Skip setup" marks onboarding done. |
-| Care Team (default) | Provider cards: phone/fax/email/account #, department directory, tips, notes, favorite, tap-to-call, copy, "Show what to say" (built-in scripts per provider type), "Ask assistant", edit, delete. Search + type filter. NPI registry search. |
-| Assistant | Claude chat with tools: search/save providers, NPI lookup, create/update tasks, draft emails, read inbox, read supply levels, call tips, web search (on by default). Side panel: Outbox (edit, Send via SMTP or "Open in my email app", copy, discard) and Inbox. Never sends email itself. Conversation lost when leaving the tab. |
-| Tasks | Checklists with status, provider, due date, steps. Add, change status, tick steps, delete. |
+| Setup wizard (first run only) | 3 steps: family info (child, DOB, parent contact, address, insurance/Medicaid IDs, diagnoses, equipment) → add care team (manual form or NPI registry search) → done. |
+| Care Team (default) | Provider cards: phone/fax/email/account #, department directory, tips, notes, favorite, tap-to-call, copy, "Show what to say" scripts, "Ask assistant", edit, delete. Search + type filter. NPI registry search. |
+| Assistant | Claude chat with tools: search/save providers, NPI lookup, create/update tasks, draft emails, read inbox, read supply levels, call tips, web search. Side panel: Outbox (edit, Send via SMTP or "Open in my email app", copy, discard) and Inbox. Never sends email itself. Conversation lost when leaving the tab. |
+| Tasks | Checklists with status, provider, due date, steps. |
 | Dashboard | Counts, low-stock table, category chips, last 10 scans. |
 | Supplies | Inventory table, search, filters, inline quantity edit, add/edit modal, delete. |
-| Scan | Camera barcode scan (Quagga) or manual code → log add / remove / check, with a free "Logged by" dropdown (any user or Anonymous). |
-| Portal | Read-only supply table. `?view=portal` only selects this tab; all other tabs remain reachable. |
+| Scan | Camera barcode scan (Quagga) or manual code → log add / remove / check, with a free "Logged by" dropdown. |
+| Portal | Read-only supply table; every other tab still reachable. |
 | Activity | Last 200 scan log entries. |
-| Users | List, add (name, email, role), remove. |
+| Users | List, add, remove. |
 
-**Data today**: `users`, `supplies`, `scan_log`, `patient_profile`, `providers`, `tasks`, `outbox`. First start seeds 5 demo users (plain-text PINs) and 35 demo supplies.
+**Data today**: `users`, `supplies`, `scan_log`, `patient_profile`, `providers`, `tasks`, `outbox`. First start seeds 5 demo users (plain-text PINs) and 35 demo supplies. There is no place to store documents. Email has no attachments.
 
-**Roles today**: `family`, `nurse`, `doctor`, `admin` are labels only. No login, no permission checks. Screens load data once and never refresh: two people looking at Supplies see different numbers until they reload.
+**Roles today**: labels only. No login, no permission checks. Screens never refresh on their own.
 
 ---
 
 ## 2. Target users and devices
 
-**Phone-first.** Daily work (logging use, scanning, restocking, ticking tasks, calling providers, approving drafts, reacting to notifications) happens on phones. The computer is mainly for the Overview ("portal"), printing reports and keeping the install running. Every screen must work one-handed on a phone, and every open screen updates live (M7).
+**Phone-first.** Daily work happens on phones. The computer is for the Overview ("portal"), printing reports and keeping the install running.
 
-**Two different kinds of admin. They are separate, and the UI must never call either of them just "admin":**
-- **Patient admin**: the **one** person who owns a patient's account. Whoever creates the patient profile becomes its patient admin automatically: the patient themselves, or a parent creating it for a child. A nurse can be patient admin if they created the profile or it was transferred to them.
-  - Adds and removes people, accepts or denies join requests, and sets each person's permissions.
-  - Gives or withdraws AI consent, acting as the patient or the patient's representative.
-  - Can hand specific abilities to specific people (delegation), but stays the sole owner.
-  - Earlier drafts allowed several "representatives"; that is replaced by this single-admin model.
-- **Computer admin** (install admin): the person who set up MediTrack on the home computer. Handles settings, backup/restore, unlocking accounts, connection and email setup, and patient-admin recovery. Being computer admin gives **no** access to any patient's information.
+**Two kinds of admin. They are separate; never call either just "admin" in the UI:**
+- **Patient admin**: the **one** person who owns a patient's account. Whoever creates the patient profile becomes its patient admin automatically: the patient themselves, or a parent creating it for a child. A nurse can be patient admin if they created the profile. The patient admin:
+  - invites and removes people, and sets each person's access level
+  - gives or withdraws AI consent, acting as the patient or the patient's representative
+- **Computer admin**: the person who set up MediTrack on the home computer. Handles settings, backup/restore, unlocking accounts, and reassigning a patient admin if one is gone. Has **no** access to patient information as computer admin.
 
-| User | Signs in (MVP) | Needs |
-|---|---|---|
-| **Family caregiver** (title e.g. Mom, Dad, Grandparent) | yes | Know what's low before it runs out; provider numbers and account #s; drafts and scripts fast; track supply-company issues; get notified. |
-| **Nurse / home health aide** (may serve several patients) | yes | By default **the same access as family** for linked patients. The patient admin can narrow it per person. |
-| **Patient (adult or older child)** | yes, if they create their own profile | Same as family; they are their own patient admin. |
-| **Patient admin** (one per patient; family, nurse or the patient) | yes | Everything, plus: people, permissions, join requests, invites, AI consent, transfer admin, patient audit log. |
-| **Delegate** (any member given "Manage people") | yes | Invite people, accept/deny requests, add/remove nurses and other ordinary members, within limits (M3). |
-| **Doctor / clinic** | **no** (role reserved for later) | Receives a printable usage report. |
-| **Computer admin** (the first user; a flag) | yes | Settings, backup/restore, unlock/reset sign-in, deactivate accounts, full audit log, patient-admin recovery. |
+| User | Needs |
+|---|---|
+| **Family caregiver** (title e.g. Mom, Dad) | Numbers fast, orders sent fast, DME emails answered fast, know what's low. |
+| **Nurse / home health aide** | Same as family by default ("Full access"); the patient admin can lower it to "Care only". |
+| **Patient (adult or older child)** | Can create their own profile and be their own patient admin. |
+| **Doctor** | No login yet; gets a printable usage report or documents by email. |
+| **Computer admin** | Settings, backup, unlock, reassign patient admin. |
 
 ---
 
 ## 3. Gaps and problems
 
 ### 3a. Security (blocking for real use)
-1. **No login.** Anyone on the Wi-Fi sees and changes everything, including diagnoses, insurance/Medicaid IDs and the parent's inbox, and can send email as the parent.
-2. **Roles not enforced.** "Read-only" Portal is just a tab; every API endpoint accepts any request.
-3. **Open CORS** (`app.use(cors())`). Any web page opened on the home network can read `/api/profile`, `/api/email/inbox` and trigger `/api/outbox/:id/send`.
-4. **PINs stored in plain text** in `pin_hash`; seeded users have known PINs (`0000`, `1234`...). Never checked.
-5. **Anyone can log as anyone** via Scan's "Logged by" dropdown.
-6. **Plain HTTP.** Health data crosses Wi-Fi unencrypted; browsers block the live camera and push notifications on non-secure pages.
-7. **CDN scripts**, unpinned, no SRI. A compromised CDN would get full data access; app fails offline.
-8. **AI data sharing is implicit.** Every assistant request sends the full family profile; `read_inbox` sends email contents; web search on by default. No consent recorded.
-9. Server accepts the whole chat history from the client, including assistant/tool turns, unchecked.
-10. `.env` holds the email app password in plain text (acceptable for a home install; must be documented).
+1. **No login**; anyone on the Wi-Fi sees and changes everything and can send email as the parent.
+2. **Roles not enforced** on any API endpoint.
+3. **Open CORS** (`app.use(cors())`): any web page on the network can read health data and trigger sending.
+4. **Plain-text PINs** in `pin_hash`, known seeded PINs, never checked.
+5. **Anyone can log as anyone** ("Logged by" dropdown).
+6. **Plain HTTP**: unencrypted on Wi-Fi; no live camera or push notifications on phones.
+7. **CDN scripts**, unpinned, no SRI.
+8. **AI data sharing is implicit**; no consent.
+9. Server trusts client-sent chat history.
+10. `.env` holds the email app password in plain text (document it).
 
 ### 3b. Broken or buggy
-1. **Deleting a supply or user with scan history fails** (FK on `scan_log`, no ON DELETE rule) with a 500, but the UI shows "deleted": the `api` helper in `index.html` never checks `r.ok`, so all save failures look like success.
-2. **Inline quantity edits bypass the log** and **overwrite** the quantity (`PUT quantity=n`), so two people editing at once silently lose one change.
-3. **No live updates**; stale numbers on every other open screen.
-4. **Timestamps** are UTC without a zone marker and parsed by the client as local time.
-5. **Family profile can't be edited after setup.**
-6. Tasks: no description field on add; title, steps, due date not editable later. Ticking a step re-sends the whole step list (another overwrite).
-7. Supply categories hard-coded in the client (`CATS`).
-8. Call scripts say "my son" / "his".
-9. Demo supplies and users seeded into every real install.
+1. Deleting a supply/user with history fails with a 500 while the UI says "deleted": the `api` helper never checks `r.ok`.
+2. Inline quantity edits bypass the log and overwrite the number; concurrent changes are lost.
+3. No live updates.
+4. Timestamps parsed as local time though stored as UTC.
+5. Profile can't be edited after setup; tasks can't be edited after creation; step ticks overwrite the whole list.
+6. Categories hard-coded in the client.
+7. Call scripts say "my son" / "his".
+8. Demo data seeded into real installs.
 
-### 3c. Confusing
-1. 9 tabs on a scrolling bar; half are off-screen on a phone. Dashboard, Portal, Activity overlap with Supplies.
-2. Static header text "Pediatric Care / Trach / Vent / G-Tube".
-3. Single-letter "icons"; small buttons (`btn-sm` ~28px) for a phone.
-4. Assistant saves/updates providers without a confirm step.
-5. No backup; data lives in one file in the unzipped folder.
+### 3c. Confusing / missing
+1. 9 tabs on a scrolling bar; overlapping Dashboard / Portal / Activity.
+2. Small buttons; letter "icons"; static header text.
+3. Assistant edits providers without confirming.
+4. No backup.
+5. **No way to keep or send doctor's orders**, the most common thing a DME company asks for.
 
 ---
 
 ## 4. MVP feature list
 
-All required before a real family uses MediTrack. Build in this order. Agency/clinic features are **not** in MVP, but the data model must not block them (section 7; section 8 "Path to agency/HIPAA").
+Build in this order. Every item passes the section 0 rule: it either speeds up a common task or is needed for safety/privacy.
 
 **M1. Data foundation and migrations**
-- Schema versioning via `PRAGMA user_version`; numbered migrations in `db.js` (section 7).
-- New tables: `organizations`, `patients` (replaces `patient_profile`, with `admin_user_id`), `patient_members`, `invites`, `join_requests`, `admin_transfers`, `ai_consents`, `sessions`, `audit_log`, `app_settings`, `push_subscriptions`.
-- Add `patient_id` (and `version` where noted) to supplies, scan_log, providers, tasks, outbox; backfill existing data.
-- Fresh installs: no seeded users or supplies.
+- `PRAGMA user_version` + numbered migrations (section 7).
+- New tables: `organizations`, `patients`, `patient_members`, `invites`, `ai_consents`, `documents`, `document_files`, `outbox_attachments`, `sessions`, `audit_log`, `app_settings`, `push_subscriptions`.
+- `patient_id` (and `version` where noted) on existing tables.
+- No seeded users or supplies on fresh installs.
+- The `organizations` table is invisible in the UI. It exists only so an agency version later doesn't need a rebuild.
 
-**M2. Self-service accounts and sign-in**
-- Anyone who can reach MediTrack can create an account: name, **title** (free text with suggestions: Mom, Dad, Grandparent, Nurse, Home health aide, Patient, Other), username, secret.
-- The title is display text only ("Sam (Night nurse)"). It never grants permissions.
-- **A new account with no patient links sees no patient data**, only the "No patients yet" screen.
-- Secret: the user chooses a **6-digit PIN** or a **password** (min 10 characters), and can switch later.
-- Both hashed with Node `crypto.scrypt` + per-user salt; never returned by any API.
-- Lockout: 5 failures → locked 15 minutes.
-- Abuse limits: max 5 new accounts per IP per hour. Computer-admin setting "Allow new accounts" (default on).
+**M2. Accounts and sign-in** (safety)
+- Anyone who can reach MediTrack can create an account: name, **title** (display only: Mom, Dad, Nurse, Home health aide, Patient, Other), username, and a **6-digit PIN or a password** (min 10 characters).
+- Secrets: scrypt-hashed with a per-user salt; never returned by the API.
+- Lockout: 5 failures → 15 min. Sign-up limited to 5 accounts per IP per hour. Computer-admin switch "Allow new accounts" (default on).
+- A new account with no patient links sees **no patient data**.
+- Session cookie: `HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS.
+- **One idle sign-out time for everyone: 12 hours.** No per-user setting.
 - Forgotten secret: the computer admin sets a temporary PIN, which must be changed at next sign-in.
-- Session: random 32-byte token in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` on HTTPS), stored in `sessions`.
-- Idle sign-out (Open decision 4): 12 h if any membership is family/self; 30 min if all memberships are nurse. Users may shorten it.
 - Accounts are deactivated, never deleted.
 
-**M3. One patient admin, per-person permissions, delegation (enforced on the server)**
-- Every patient has exactly **one patient admin**, stored as `patients.admin_user_id`. It is set automatically to the user who creates the patient. The patient admin is also a member with every permission.
-- Every other person linked to the patient (`patient_members`) has:
-  - **role**: `family`, `nurse` or `self` (the patient themselves). It is a label plus a starting preset. `doctor` is reserved (in the schema, not in the UI).
-  - **eight permission switches**, set by the patient admin (or, within limits, a delegate).
+**M3. Permissions: one patient admin, two access levels, one email switch** (safety/privacy)
+- `patients.admin_user_id` holds the **one** patient admin, set to whoever created the patient.
+- Every other linked person has an **access level** and an **Email** switch.
 
-**Always allowed for every linked person** (the baseline; no switch):
-- see the patient's name, DOB and clinical info (diagnoses, equipment, care notes)
-- see supplies, levels and history; log Used / Restocked / Counted (scan or manual)
-- see care team names, phone/fax/department numbers and call scripts
-- see tasks and tick steps
-- print the usage report (without insurance info)
-- see the member list; receive notifications they switch on; **Leave**
+| | Care only | Full access (default for family, nurse, self) | Patient admin |
+|---|---|---|---|
+| Patient name, DOB, clinical info (diagnoses, equipment, care notes) | view | view + edit | view + edit |
+| Supplies: view, log Used / Restocked / Counted | yes | yes | yes |
+| Supplies: add/edit/archive items, thresholds, low-stock alerts | no | yes | yes |
+| Care team: names, phone/fax/departments, call scripts, Call | yes | yes | yes |
+| Care team: account #s, notes; add/edit/delete; NPI search | no | yes | yes |
+| Insurance/Medicaid IDs, address, parent contact | no | yes | yes |
+| Tasks: view, tick steps | yes | yes | yes |
+| Tasks: create/edit/delete | no | yes | yes |
+| **Documents**: view, scan/upload, tag, delete (recoverable) | no | yes | yes |
+| AI assistant (within the patient's AI consent) | no | yes | yes |
+| **Email switch** (default on): inbox, outbox, send email, send documents | no | if switch on | yes |
+| Usage report | yes (no insurance) | yes | yes |
+| Invite people, remove people, set access level and Email switch | no | no | yes |
+| AI consent; permanently delete a document; archive patient | no | no | yes |
 
-**Permission switches:**
-| # | Switch | What it allows |
-|---|---|---|
-| 1 | **Insurance & account numbers** | See and print insurance/Medicaid IDs, home address, parent contact details, provider account numbers and provider notes. |
-| 2 | **Email inbox & outbox** | Read the care inbox, see drafts in the Outbox. |
-| 3 | **Send email** | Approve and send drafts. Requires switch 2. |
-| 4 | **AI assistant** | Use the assistant for this patient (still limited by the patient's AI consent, M11). |
-| 5 | **Edit supply list** | Add/edit/archive items; change thresholds and low-stock alert settings. |
-| 6 | **Manage tasks** | Create, edit, delete tasks. |
-| 7 | **Edit profile & care team** | Edit patient profile; add/edit/delete providers; NPI search. |
-| 8 | **Manage people** (delegation) | Create invites, accept/deny join requests, add and remove ordinary members, set their switches 1-7. Limits below. |
-
-**Presets** (one tap; the switches can then be adjusted):
-- **Full access**: switches 1-7 on, 8 off. **Default for family, nurse and self**, per the owner's direction that nurses get the same access as family.
-- **Hands-on care only**: all switches off (baseline only). For an aide or sitter, or a nurse who doesn't handle insurance or email.
-- Switch 8 is never part of a preset. The patient admin turns it on deliberately for a specific person.
-
-**Only the patient admin can** (never delegated):
-- turn "Manage people" on or off for anyone
-- remove or change the switches of a delegate
-- give or withdraw AI consent
-- turn the patient share code on/off or replace it
-- transfer the admin role
-- view the patient's audit log
-- archive the patient
-
-**Delegate limits ("Manage people"):**
-- can invite and accept people only with switches the delegate has themselves (no granting more than they hold), and never switch 8
-- can remove members who are not delegates; cannot remove the patient admin or another delegate
-- cannot change their own switches
-- every delegate action is audited and announced to the patient admin by push ("someone joined", "someone was removed")
-
-**Family vs nurse:** with the default preset, they differ only in the role label and the default idle sign-out (M2).
-
-**Computer admin** (user flag, separate from patient admin):
-- can change settings, run backup/restore, unlock accounts, reset secrets, deactivate accounts, view the full audit log, and do patient-admin recovery (M4)
-- can **not** see any patient's data or add people to a patient unless they are also a member of that patient
-
-Enforcement:
-- Patient-scoped endpoints live under `/api/patients/:patientId/...`. Middleware loads the caller's membership and checks the baseline, the needed switch, or "is patient admin" on **every** call.
-- Fields covered by switch 1 are **removed on the server** for people without it.
-- Assistant tools follow the switches:
-  - `read_inbox` / `draft_email` need switch 2
-  - `create_task` / `update_task` need switch 6
-  - `save_provider` needs switch 7
-  - identity/insurance data needs switch 1 **and** consent
-- Unscoped endpoints:
-  - `/api/auth/*`
-  - `/api/me` (user plus their patients, role, switches, and whether they are patient admin)
-  - `/api/patients?search=` (own patients only)
-  - `POST /api/patients` (create a patient; the creator becomes its patient admin)
-  - `/api/invites/*`, `/api/join-requests/*`, `/api/admin-transfers/*`
-  - `/api/admin/*` (computer admin)
-  - `/api/call-tips`, `/api/lookup`
-- Remove `cors()`. Reject state-changing requests whose `Origin` header is present and not the app's own origin.
+- Turning the Email switch off is how a family keeps a nurse out of the care inbox.
+- **Recommended setup (not a question):** connect MediTrack to a **separate email address used only for care and supply companies**, not a personal inbox. README and first-run tips say so.
+- Enforcement:
+  - patient-scoped endpoints live under `/api/patients/:pid/...`, and middleware checks membership, level, Email switch or patient admin on **every** call
+  - restricted fields are **removed on the server**
+  - assistant tools follow the same rules
+- Remove `cors()`. Add an origin check on state-changing requests.
 - Errors: 401 when not signed in, 403 when not allowed, 404 for patients the caller isn't linked to.
+- The computer admin is a separate user flag with no patient access by itself.
 
-**M4. Joining, removing, transferring admin, recovery**
-Two ways in. **Neither lets anyone browse, search or list patients.** Both need something the family handed over. Both can be handled by the patient admin or a delegate (M3).
+**M4. Invites, removing people, recovery, first run**
+- **Invites are the only way in** (MVP). The patient admin: **Members → Invite** → picks Full access or Care only, Email on/off → gets a code (8 characters, e.g. `K7QM-4ZPX`), a link and a QR code → **Share** (phone share sheet).
+  - single-use; expires in 72 h; stored hashed
+  - the invitee opens the link → creates an account or signs in → **Accept** → in
+  - the patient admin gets a push "someone joined using your invite", and the newcomer shows at the top of Members with **Remove** for 7 days
+- **Removing:** the patient admin taps a person → **Remove**. Anyone can **Leave**, except the patient admin.
+  - takes effect immediately, including on live screens (M7)
+  - the computer admin can deactivate an account entirely
+- **Reassign patient admin** (handover or recovery): done by the computer admin in Computer admin › **Patient admin**.
+  - choose an existing member of that patient, type a reason, **Reassign**
+  - takes effect immediately, is audited, and both people are notified
+  - the computer admin can't make themselves patient admin unless they are already a member
+  - in a household the computer admin is usually the parent, so this one tool covers both "hand over" and "admin is gone"
+- **First run:**
+  1. The server prints a one-time **setup code** in the MediTrack window. The Welcome screen asks for it, so nobody else on the Wi-Fi can claim the install.
+  2. Create account → this user becomes **computer admin**.
+  3. Add-patient wizard (M9) → they become **patient admin**.
+- Upgrades use the same flow (section 7).
 
-**Way 1: Invite (the patient admin or a delegate starts it).**
-- Choose role and preset/switches up front.
-- The result is a single-use code (8 characters, e.g. `K7QM-4ZPX`) with a link `<app address>/join/<code>` and a QR code. It expires after 72 h, can be cancelled, and is stored hashed.
-- **No extra approval tap:** accepting gives access at once, because the person and their permissions were already chosen. Safety net:
-  - the patient admin gets a push "someone joined using your invite"
-  - the Members screen highlights the newcomer with **Remove**
-  - codes are single-use and short-lived
+**M5. Patient switcher**
+- The current patient is in the client URL (e.g. `#/p/12/supplies`).
+- A patient chip is always in the header and on the Scan sheets. Tap it → list of the user's patients → switch.
+- After sign-in: 0 patients → "No patients yet" (Enter invite code / Create a patient profile); 1 → Home; several → last used.
 
-**Way 2: Request to join (the newcomer starts it).**
-- Each patient has a **share code** (e.g. `MT-P4X9-KQ2D`), **off by default**.
-- Only the patient admin turns it on, gives it out (read aloud, text, QR), turns it off or replaces it.
-- It only lets someone *ask*; it gives no access by itself.
-- After sending, the requester sees only "Request sent. The patient's admin will review it." No name, no DOB.
-- Rate limit: 5 code attempts per account per 15 min, and per IP. One pending request per person per patient. Requests expire after 14 days.
-- The share code was chosen over "type the admin's username" because it doesn't expose usernames, points at exactly one patient, and can be switched off or changed if it leaks.
-
-**Phone flow: request (nurse Sam asks to join)**
-1. Sam creates an account (or signs in) → "No patients yet" → **Ask to join a patient**.
-2. Enters the share code (or scans the QR code), plus an optional message ("Night nurse from Sunrise Home Health, starting Monday") → **Send request**.
-3. Sees "Request sent". Their Home shows "Waiting for approval" with **Cancel request**.
-4. Accepted → push "MediTrack: you've been given access." and the patient appears in My patients. Denied → push "MediTrack: your request wasn't accepted." No details.
-
-**Phone flow: request (patient admin Mom, or a delegate, answers)**
-1. Push "MediTrack: someone asked to join." → **Members → Requests**.
-2. Card: name, title, username, message, account age.
-3. **Accept** opens a sheet: role (Family / Nurse), preset (Full access / Hands-on care only), switches 1-7 (expandable; switch 8 is shown only to the patient admin) → **Confirm**.
-4. **Deny**, with an optional tick "Don't let this person request again for this patient".
-
-**Phone flow: invite (Mom invites Dad)**
-1. Members → **Invite someone** → role, preset/switches, optional label ("Dad") → **Create invite**.
-2. The screen shows a QR code, the code in large letters, the expiry, and **Share** / **Copy**.
-3. Dad opens the link → creates an account or signs in → "Mom invited you to join [first name]'s care team as Family" → **Accept** → that patient's Home.
-
-**Removing people**
-- The patient admin can remove anyone.
-- Delegates can remove ordinary members (not the patient admin, not other delegates).
-- Any member can **Leave**. The patient admin can't leave until they have transferred the admin role.
-- The computer admin can deactivate an account, which removes it from every patient. If that account was a patient admin, the patient goes to recovery.
-- Removal and permission changes apply **immediately**: the next request is checked, and the person's live connection (M7) is told to reload or is closed.
-
-**Transfer admin** (one admin is a single point of failure, so make handing over easy)
-1. The patient admin → Members → a person → **Make patient admin** (or Patient profile → **Transfer admin**). Any current member can be chosen, including a nurse.
-2. Confirm screen: "[Name] will own this account, manage people and AI permission. You will stay as a member with Full access." → **Send**.
-3. The chosen person gets a push and a card on Home: **Accept** / **Decline**. Nothing changes until they accept. Pending transfers expire after 7 days and can be cancelled.
-4. On accept:
-   - `patients.admin_user_id` switches
-   - the old admin becomes a member with Full access (the new admin can change that later)
-   - existing AI consent stays in force, but the new admin sees a one-time prompt "Review AI permission" and can withdraw it
-5. Audited; both people notified.
-
-**Recovery** (patient admin gone, locked out, or account deactivated)
-- The computer admin → Computer admin › **Patient-admin recovery** → the patient (shown by name only to choose; no other data) → picks one of that patient's **existing members** → types a reason → **Reassign**.
-- The new admin is notified and must accept, as in a transfer. The previous admin, if their account is still active, gets a push "Your patient admin role was reassigned."
-- The computer admin cannot make themselves patient admin unless they are already a member of that patient, and cannot add new people.
-- Recorded in the audit log with the reason. The patient's members see a line in Members: "Admin reassigned by the computer admin on [date]".
-- If the patient has no other members, recovery is not possible. The data stays and the patient can be archived by the computer admin.
-
-**First run (the very first user)**
-1. The server prints a one-time **setup code** in the MediTrack window on the computer. The Welcome screen asks for it, so nobody else on the Wi-Fi can claim the install.
-2. Create account (name, title, username, PIN or password). This user becomes **computer admin**.
-3. **Add your first patient** wizard (M9). The creator becomes that patient's **patient admin**.
-4. Optional wizard step: **Invite people** or **Turn on join requests**.
-
-Upgrades from the current version use the same flow; the first account becomes patient admin of the migrated patient (section 7).
-
-**M5. Patient switcher and search**
-- The current patient is part of the client URL (e.g. `#/p/12/supplies`).
-- A patient name chip is always visible in the header and on the Scan sheet. Tap it to open the switcher.
-- My profile → **My patients**: list with role and an "Admin" badge where the user is patient admin.
-- Search box (name, DOB) when the user has more than 5 patients. Search covers own patients only.
-- After sign-in: no patients → "No patients yet"; 1 patient → Home; several → the last-used patient or the picker.
-
-**M6. Trustworthy supply log (change-based quantities)**
-- Quantities change **only** through movements: `POST /api/patients/:pid/supplies/:id/movements` with `{action: add|remove|check|adjust, amount, reason?}`.
-- `add` / `remove` are applied as **+/- changes** in one SQL statement (`quantity = MAX(0, quantity ± n)`). They are never overwritten, so two people logging at once both count.
-- `check` / `adjust` ("Set exact count") set an absolute number and record `quantity_before` / `quantity_after`.
-- Every movement writes a `scan_log` row with the signed-in user, patient, action, amount, before/after, and optional reason.
+**M6. Stock log** (safety)
+- Quantities change **only** through movements: `POST .../supplies/:id/movements {action: add|remove|check|adjust, amount, reason?}`.
+- `add` / `remove` are **+/- changes** applied in SQL (`quantity = MAX(0, quantity ± n)`), so simultaneous logs never overwrite each other.
+- `check` / `adjust` ("Set exact count") record before/after; a count wins over a simultaneous change, and both are logged.
+- Every movement is written to `scan_log` with the signed-in user, patient, action, amount, before/after.
 - `PUT` on a supply no longer accepts `quantity`.
-- Remove the "Logged by" dropdown. Archive supplies instead of deleting them.
+- The "Logged by" dropdown is removed. Supplies are archived, not deleted.
 
-**M7. Live sync across every screen**
-Owner requirement: when stock (or other shared data) changes, every open screen on every account shows it at once, with no refresh.
-
-**Mechanism: Server-Sent Events (SSE).**
-- `GET /api/patients/:pid/events`: one stream for the patient on screen. Requires a session and membership.
-- `GET /api/me/events`: one per signed-in user, for membership changes, requests, transfers and Overview counts across patients.
-- MediTrack is a single Node process, so an in-memory publish/subscribe per patient is enough. No extra services.
-
-**Events** carry a type, the record id, the new `version`, and only baseline-visible fields:
-
-| Event | Payload | Who receives |
-|---|---|---|
-| `supply.changed` | id, quantity, low flag, version, by (name + title) | all members |
-| `supply.movement` | supply id, action, amount, by, at | all members |
-| `task.changed` | id, version | all members |
-| `outbox.changed` | id, status | members with switch 2 |
-| `providers.changed` | id | all members (client refetches; server strips fields) |
-| `profile.changed` | version | all members (client refetches) |
-| `consent.changed` | scopes on/off | all members |
-| `members.changed` | (no details) | all members; patient admin and delegates refetch Members |
-| `admin.changed` | new admin's name + title | all members |
-| `access.changed` | (no details) | the affected person only; client reloads `/api/me` and leaves the patient if removed |
-
-- Anything sensitive is never pushed in an event. The client refetches through the normal API, which applies switches and field stripping.
-- When a person's permissions change or they are removed, the server closes their patient stream right away.
-- A heartbeat comment every 25 s keeps connections open. Session expiry closes the stream.
-
-**Reconnect:**
-- Each patient keeps an in-memory ring buffer of its last 500 events with increasing ids.
-- The browser's `EventSource` reconnects and sends `Last-Event-ID`; the server replays what was missed.
-- If the id is too old or the server restarted, the server sends `resync` and the client refetches the current screen.
-- The client also refetches when the app returns to the foreground or the network comes back.
-- Header status dot: green "Live", gray "Reconnecting…".
-- While offline, edit buttons show "Not connected, can't save right now". There is no offline queue in MVP.
-
-**Conflicting edits:**
-- **Quantities:** +/- changes (M6), so they never conflict.
-- **"Set exact count" vs a change made at the same moment:** the count wins, because it is what's physically on the shelf. Both are logged. Other screens show "Sam just counted: 12".
-- **Everything else** (supply details, tasks, profile, providers, drafts, permissions) has a `version` number.
-  - Saves send the version they started from. If it no longer matches, the server answers **409** with the current record.
-  - The form then shows "Sam (Night nurse) changed this a moment ago" with their values, and the user can **Keep mine** or **Use theirs**.
-  - Nothing is ever silently overwritten.
-- **Task steps:** each step has a stable `id`, and ticking uses `PATCH /tasks/:id/steps/:stepId {done}`.
-- **If the record you're editing changes underneath you:** a banner appears; your typing is kept until you choose.
+**M7. Live updates** (owner requirement: stock changes show on every screen at once)
+- **Server-Sent Events:** `GET /api/patients/:pid/events` for the patient on screen; `GET /api/me/events` for membership changes. In-memory publish/subscribe (single Node process).
+- Events carry only type, id and baseline-visible fields:
+  - `supply.changed` carries quantity and low flag
+  - other events tell the client what to refetch: `task.changed`, `document.changed` (Full access only), `outbox.changed` (Email switch only), `profile.changed`, `providers.changed`, `consent.changed`, `members.changed`, `access.changed` (affected person only)
+- Sensitive data is always refetched through permission-checked endpoints.
+- Heartbeat every 25 s. Removing a person or changing their access closes their stream.
+- **Reconnect:** `EventSource` reconnects automatically. On reconnect, and whenever the app returns to the foreground, the client simply **refetches the current screen**.
+  - header dot: green "Live", gray "Reconnecting…"
+  - while disconnected, saving shows "Not connected, try again in a moment"
+- **Simultaneous edits** of anything other than quantities: records carry a `version`.
+  - if someone else saved first, the server answers 409
+  - the app reloads the record and shows "Sam (Night nurse) just changed this. Your screen is updated. Please make your change again."
+  - nothing is silently overwritten; no side-by-side merge screen
+  - task steps have stable ids and are ticked individually (`PATCH /tasks/:id/steps/:stepId`), so step ticks never collide
+- Values changed by someone else get a brief soft highlight.
 
 **M8. Bug fixes from 3b**
 - The API helper shows server errors.
-- Timestamps are ISO-8601 UTC, shown in local time.
-- The profile is editable and tasks are fully editable.
-- Categories come from the server.
-- Call scripts use the child's name (`[child's name]`) and no pronouns (Open decision 7).
+- UTC timestamps in ISO-8601, shown in local time.
+- Editable profile and tasks.
+- Categories from the server.
+- Call scripts use the child's name, no pronouns.
 
 **M9. Adding a patient**
-- Any signed-in user can add a patient and becomes its **patient admin** (owner: "when a patient creates their profile it will make them admin of their account").
-- Wizard (reuses `SetupWizard`):
-  1. **Who is this for?** "Me" (role `self`) or "Someone I care for" (role `family` or `nurse`)
-  2. Patient info
-  3. Care team
-  4. Supplies: start from the common trach / vent / G-tube list (35 items, quantities 0) or start empty, then "Which items should alert you when low?" (none ticked by default)
-  5. AI sharing: explained, off
-  6. Invite people / turn on join requests (optional)
+- Any signed-in user can create a patient profile and becomes its patient admin.
+- Wizard, 4 steps:
+  1. **For me / for someone I care for** + patient info
+  2. Care team (manual or "Find near me")
+  3. Supplies: starter list (35 items, quantities 0) or empty, plus "Which items should alert you when low?" (none ticked)
+  4. Done
+- AI sharing and invites are set later from their screens. They aren't wizard steps, to keep setup short.
 
-**M10. Works with any connection method; scanning on phones**
-The build must not depend on Open decision 1. Settings in `.env` choose between:
-- plain HTTP on the home network (default)
-- HTTPS with certificate files (`HTTPS_CERT`, `HTTPS_KEY`)
-- running behind a private-network app or tunnel that provides HTTPS (`TRUST_PROXY=1`, optionally localhost-only)
+**M10. Works with any connection; scanning on phones**
+- The build does not depend on Open decision 1. `.env` chooses one of:
+  - plain HTTP (default)
+  - HTTPS with certificate files (`HTTPS_CERT`, `HTTPS_KEY`)
+  - behind a private-network app or tunnel (`TRUST_PROXY=1`)
+- **Barcode scanning:**
+  - secure connection: live camera
+  - otherwise: **"Take photo of barcode"** (`<input type="file" accept="image/*" capture="environment">` + Quagga single-image decode) and manual entry
+- Live updates work on every option. Push notifications need a secure connection.
+- Settings shows "Connection: secure" / "Connection: home Wi-Fi only, not encrypted".
 
-The client checks what the connection allows:
-- **Secure connection:** live camera scanning and push notifications.
-- **Not secure:** **"Take photo of barcode"** (`<input type="file" accept="image/*" capture="environment">` + Quagga single-image decode) plus manual entry. Notifications show "need a secure connection".
+**M11. Documents** (new; the "send an order" task depends on it)
+*Capture*
+- **Scan with the phone camera:** Documents → **Scan** (also a **Scan document** button on Home) → the phone camera opens via `<input type="file" accept="image/*" capture="environment">`.
+  - after each photo: a thumbnail strip with **Add page** / **Done**; pages can be deleted or reordered by dragging
+  - **This works on plain home Wi-Fi.** Photo capture through a file input doesn't need HTTPS, unlike live barcode scanning.
+- **Cleanup on the phone** (canvas, no extra library; works on any connection):
+  - auto-rotate from EXIF
+  - downscale to max 2000 px on the long edge
+  - "document look" (grayscale + contrast boost; on by default, toggle per page)
+  - JPEG quality 0.8
+- **Auto-crop** (edge detection) is **Later**: it needs a large image library, and live edge guides need the live camera, which requires HTTPS. **Tip shown in the app:** iPhone (Files or Notes app, "Scan Documents") and Android (Google Drive "Scan") already make cropped PDFs; use them, then **Upload**.
+- **Upload:** **Upload file** accepts PDF, JPEG, PNG (HEIC is converted on the phone when the browser can decode it; otherwise "Please upload as JPEG or PDF").
+- **One PDF per document:** the server combines pages into a single PDF with `pdf-lib` (pure JS dependency). Uploaded PDFs are stored as they are; uploaded images become a 1-page PDF.
+- Limits: 20 MB per document, 30 pages per scan. File type checked by content (magic bytes), not by name.
 
-Live sync works on every option. Settings shows "Connection: secure" or "Connection: home Wi-Fi only, not encrypted".
+*Tag* (one short form after capture; everything prefilled so **Save** is usually one tap)
+- **Purpose:** Order / prescription (default), Letter of medical necessity, Insurance approval, Other.
+- **Doctor:** pick from Care Team (doctor/specialist types; the last one used is preselected; optional).
+- **Date:** today by default.
+- **Title:** optional (e.g. "Suction catheters 8Fr, 6 months").
+- **Renew by:** optional date. If set, the document shows an "Expires soon" badge within 30 days. Reminder notifications are Later.
 
-**M11. AI assistant: consent, permissions, background work**
-Consent:
-- Using the assistant needs **switch 4**. Each user sees a one-time notice that what they type is sent to the AI provider.
-- **Patient data goes to the AI only with consent recorded by the patient admin**, acting as the patient (role `self`) or as the patient's representative. It is off by default, per patient, and revocable.
-- Only the patient admin sees the switches. Turning sharing on shows who is consenting: "I am the patient" / "I am the patient's parent, guardian or authorized representative" → **Confirm**.
-- Delegates cannot change consent.
-- Each grant/revoke is stored in `ai_consents`: who, capacity (`patient` / `representative`), when, when/by whom revoked. History kept.
-- Two scopes, each on/off (exact contents: Open decision 3):
-  - `clinical`: diagnoses, equipment, care notes, supply list and levels
-  - `identity_admin`: name, DOB, address, parent contact, insurance/Medicaid IDs, care team details and account numbers
-- Without a scope (or without the matching switch for the person asking), the server leaves that data out of the prompt. Tools return "Not shared with the assistant", and drafts use `[placeholders]`.
-- Revoking takes effect on the next request and clears in-memory chats for that patient (`consent.changed`).
-- After an admin transfer, the new admin is prompted to review consent (M4).
+*Find*
+- Documents screen: newest first. Filter chips for purpose; a doctor dropdown. Each row: purpose badge, title or "Order from Dr X", date, page count, expiry badge.
+- Tap → full-screen PDF view (browser viewer), with **Send to…**, **Edit tags**, **Download**, **Delete** in a "…" menu.
 
-Background work:
-- Chat requests run as server-side jobs. If a job finishes and the client hasn't collected it within 10 s, send an "assistant has an update" push.
-- Results stay in memory until read or for 24 h, never written to disk.
+*Send* (needs Full access + Email switch)
+- **From the Care Team card:** DME and pharmacy cards with an email get a **Send order** button. It creates an Outbox draft and opens it:
+  - To: the provider's email
+  - Subject: "Order for [child's name], [date]"
+  - Short body (with the account number when the sender has Full access)
+  - Attached: **the newest non-deleted document with purpose "Order"**. The draft shows the attachment with **Change** (pick other or additional documents).
+- **From a document:** **Send to…** → provider list (DME/pharmacy first, last used on top) → the same draft.
+- Review → **Send** → confirm.
+- If SMTP isn't set up: the draft shows **Download attachment** + **Open in my email app** with a one-line note "Attach the downloaded file". A mailto link can't carry attachments.
+- Attachment total max 20 MB per email.
+- **Fax-ready:** every Outbox item has a `channel` (`email` now; `fax` reserved) and a `to_fax`. The send endpoint dispatches by channel. When a fax provider is added later, the draft gets a "Send by: Email / Fax" choice. Nothing else changes.
 
-Safety:
-- `save_provider` on an existing provider needs a confirm card (old vs new).
-- The client sends only new user text; the server keeps the conversation per session and patient.
+*Assistant*
+- `draft_email` accepts `document_ids`. New tool `list_documents` returns **metadata only** (id, purpose, doctor, date, title, expiry).
+- Both need the patient's **clinical** AI consent, because document titles and purposes are medical information. Without it the assistant says "Documents aren't shared with the assistant for this patient; attach it in the draft yourself."
+- The assistant never reads document contents in MVP (Later, under the same consent).
+- Drafts with attachments still need a human **Send**.
+
+*Delete and storage*
+- **Delete** (Full access) moves a document to **Recently deleted** for 30 days, where it can be restored. After 30 days it is purged automatically (daily job).
+- The patient admin can **Delete permanently now** (e.g. a document saved to the wrong patient).
+- Sent emails keep the attachment's filename in their history even after the document is purged.
+- **Files are stored inside the SQLite database** in a separate table (`document_files`, BLOB), not as loose files:
+  - backups and restore stay a single file and automatically include documents
+  - files can only be read through permission-checked endpoints (never from the static folder)
+  - deleting is transactional
+- Settings shows storage used, and warns above 2 GB.
+- Download responses send `Content-Disposition`, `Cache-Control: no-store` and a generated filename (no patient name in the URL).
+
+*Audit*
+- Document uploaded, viewed/downloaded, tags edited, attached to a draft, sent, deleted, restored, permanently deleted, purged.
+
+**M12. AI assistant: consent, attachments, background updates**
+Consent (privacy):
+- Patient data goes to the AI only with consent **recorded by the patient admin**, acting as the patient or the patient's representative. Off by default, per patient, revocable.
+- Two scopes:
+  - `clinical`: diagnoses, equipment, notes, supply list and levels, document metadata
+  - `identity_admin`: name, DOB, address, insurance IDs, care team details and account numbers
+- Without a scope, the server leaves that data out of the prompt and the matching tools refuse. Drafts then use `[placeholders]`.
+- Revoking takes effect on the next request.
+- Grants and revokes are stored in `ai_consents` (who, capacity `patient`/`representative`, when).
+- One-time notice per user that what they type is sent to the AI provider.
+
+Tools and safety:
+- Tools follow M3 (Full access; inbox and draft tools need the Email switch).
+- `save_provider` on an existing provider shows a confirm card.
+- The server keeps the conversation; the client sends only new text.
 - Computer-admin settings: assistant on/off, web search on/off, inbox reading on/off.
 
-**M12. Local front-end libraries**: serve React (production), ReactDOM, Babel standalone and Quagga from `client/vendor/`, pinned. No CDN requests.
+Background updates:
+- Chat requests run as server-side jobs. If the user has left when a job finishes, send an "assistant has an update" push.
+- Results are kept in memory for up to 24 h, never written to disk.
 
-**M13. Phone-first navigation + computer Overview** (section 6). Web app manifest, icon, service worker.
+DME replies:
+- Any open task linked to a provider is a "tracked issue" (no extra switch).
+- When IMAP is set up, the server checks the inbox every 15 min. A new email from that provider's email address or domain:
+  - shows on Home under "Waiting on you" with **Draft reply** / **Reply**
+  - sends a push
+- The AI is never run on incoming mail by itself.
+- Inbox items also get a plain **Reply** button (creates a "Re:" draft to the sender) for people not using the assistant.
 
-**M14. Printable usage report** (how families share with doctors for now)
-- Per patient, date range (default 3 months).
-- Per item: start qty, used, restocked, end qty, average use per week/month, low status.
-- Header: patient name, DOB, generated by/when.
+**M13. Local front-end libraries**: React (production), ReactDOM, Babel standalone and Quagga served from `client/vendor/`, pinned. No CDNs.
+
+**M14. Phone-first navigation, Home quick actions, computer Overview** (section 6)
+
+**M15. Printable usage report** (owner: the way to share with doctors for now)
+- One screen: date range (default 3 months) → per item: used, restocked, average per month, current qty.
 - Print / Save as PDF.
-- "Include insurance info" only with switch 1.
-- Audited.
+- Insurance info only for Full access.
 
-**M15. Backup and restore** (computer admin)
-- "Download backup" (SQLite online backup API, `meditrack-backup-YYYY-MM-DD.db`, health-information warning).
-- "Restore" with confirm.
-- README section on upgrading safely.
+**M16. Backup and restore** (computer admin): "Download backup" (SQLite online backup; includes documents; health-information warning); "Restore" with confirm; README upgrade guide.
 
-**M16. Audit log**
-- Written from M2 onward; this item adds the viewer. Append-only.
-- Logged events:
-  - sign-ins and lockouts; account changes
-  - patient created; invites, requests, membership and **permission changes** (before → after, by whom, whether by a delegate)
-  - **admin transfers and recoveries** (with reason)
-  - profile viewed (once per session per patient) and edited
-  - AI consent with capacity
-  - provider changes (marked if via the assistant)
+**M17. Audit log, written** (privacy)
+- Append-only `audit_log` written from M2 onward:
+  - sign-ins and lockouts
+  - patient created; invites, joins, removals, access changes, admin reassignments (with reason)
+  - profile edited; AI consent
+  - provider changes (marked if done via the assistant)
+  - documents (M11)
   - email sent, report generated, backup/restore
-- The computer admin sees everything; the patient admin sees their patient's entries.
+- **No viewer screen in MVP.** The computer admin can export it as CSV from Settings when needed. Viewer: Later.
 
-**M17. Push notifications**
-- Needs a secure connection (M10). On iPhone the app must also be on the Home Screen. Built regardless; it switches on when possible.
-- **Events:**
-  1. **Low stock, chosen items only.**
-     - Each item has "Alert when low" (off by default) and its own threshold (`low_stock_threshold`).
-     - These settings are **per patient and shared by everyone**. Changing them needs switch 5.
-     - One push when an alerting item drops to or below its threshold. No repeat until it has been restocked above.
-     - Each person chooses whether *they* receive low-stock pushes for each patient.
-  2. **Assistant updates on supply-company issues** (only with switch 4; email-based ones also need switch 2):
-     - **answer ready**: background job finished while away
-     - **draft needs approval**: new assistant draft in the Outbox
-     - **reply received**: new email from a provider linked to a *tracked issue*. A tracked issue is a task linked to a provider, not done, with "Notify me about updates" on. That switch is on by default when the assistant creates the task.
-     - Reply detection: the server checks the inbox every 15 min (when IMAP is set up and inbox reading is on) and matches the sender against the provider's email, department emails, or email domain.
-     - The AI is never run on incoming mail by itself.
-  3. **Tasks due today / overdue:** optional, off by default.
-  4. **People and admin:**
-     - patient admin and delegates: "someone asked to join"
-     - patient admin: "someone joined" / "someone was removed" when a delegate did it
-     - newcomer: "you've been given access" / "your request wasn't accepted"
-     - transfers: "you've been asked to become admin"
-- **Text is generic**, with no health details, item, provider or patient names:
-  - "MediTrack: a supply is running low."
-  - "MediTrack: the assistant has an update."
-  - "MediTrack: a reply arrived about one of your issues."
-  - "MediTrack: a task is due."
-  - "MediTrack: someone asked to join."
-  - "MediTrack: you've been asked to become an admin."
-- Tapping a notification opens the right screen for the right patient.
-- Settings: My profile → Notifications, per patient. People/admin pushes are always on for the patient admin and delegates.
+**M18. Push notifications** (owner requirement; needs a secure connection; on iPhone the app must be on the Home Screen)
+- **Low stock, chosen items only:** each item has **Alert when low** (off by default) and its threshold.
+  - settings are per patient and shared by everyone; Full access can change them
+  - one push per drop below the threshold
+- **Assistant updates on DME issues:** answer ready; draft needs approval; reply arrived (tracked issues).
+- **Membership:** "someone joined using your invite" (patient admin); "you've been given access" (newcomer).
+- **Text is always generic**, with no health details, item, provider or patient names: "MediTrack: a supply is running low." / "MediTrack: the assistant has an update." / "MediTrack: a reply arrived about one of your issues."
+- Tapping opens the right screen and patient.
+- **Settings:** My profile → per patient, two switches: **Low stock** and **Assistant updates**. Both on by default.
 - Pushes only go out while the home computer and MediTrack are running; the UI says so.
+
+New server dependencies: `multer` (uploads), `pdf-lib` (PDF assembly), `web-push` (notifications).
 
 ---
 
 ## 5. Later features (not MVP)
 
-- **Doctor login**: enable the reserved `doctor` role (baseline only, read-only). Roles, presets and join flows already allow it.
-- **Agency/clinic version**: several households per install or hosted, organization admins, staff directories, 2-step sign-in (see section 8).
-- More permission switches if real use shows a need (e.g. hide clinical notes from some people).
+### Moved out of the MVP in revision 5 (simplicity principle)
+| Item | Why it moved | MVP replacement |
+|---|---|---|
+| 8 individual permission switches | Too many decisions when adding a nurse; the owner's real need was "same as family" plus "keep someone out of the inbox". | Two levels (Full access / Care only) + Email switch. The data model can grow into switches later. |
+| Delegated "manage people" | Rarely needed in one household; adds rules and screens. | Only the patient admin manages people. |
+| Join requests with a share code | Two ways in means more screens and a code to manage. Invites do the same job in fewer steps. | Invites only (Open decision 2). |
+| Self-service admin handover (send/accept) | One computer-admin tool covers both handover and recovery. | Computer admin › Reassign patient admin. |
+| "Keep mine / use theirs" conflict screen | A decision screen for a rare event. | Reload + "please make your change again". |
+| Event replay after reconnect | More moving parts for no visible difference. | Refetch the current screen on reconnect. |
+| Audit log viewer | Not a common task; the log itself is kept. | CSV export by the computer admin. |
+| "Tasks due" notifications, request/transfer notifications, per-event notification settings | Not in the owner's list; more settings. | Two switches: Low stock, Assistant updates. |
+| Per-user / per-role idle sign-out | A setting nobody needs daily. | 12 hours for everyone (Open decision 6). |
+| Patient search | A household has few patients. | Simple list in the switcher. |
+| AI sharing and invites as wizard steps | Make setup longer. | Set from their own screens. |
+| "Notify me" switch on each task | Extra choice. | Every open task linked to a provider is tracked automatically. |
+
+### Other later features
+- **Documents:** auto-crop / edge detection; live camera document view (needs HTTPS); the assistant reading document contents (same clinical consent); renewal reminder notifications; text search inside documents.
+- **Fax sending** through an online fax service (the Outbox `channel` is already in place).
+- Doctor login (reserved `doctor` role).
+- Agency/clinic version: several households, organization admins, staff directories, 2-step sign-in, hosting (section 8).
 - Email-based "forgot my PIN/password".
 - Resupply schedule per item (Open decision 5).
-- Expiration dates / lot numbers; go-bag checklist; storage location.
-- One-tap "draft resupply email" for low items, per DME provider.
+- Expiration dates / lot numbers on supplies; go-bag checklist; storage location.
+- One-tap "reorder all low items" email per DME.
 - Task assignment; shift-handoff notes.
-- Fax sending via an online fax API.
 - Offline mode with queued changes.
 - Persisted assistant conversations (opt-in).
 - Pre-compiled client bundle.
-- Encryption at rest (SQLCipher) and encrypted backups.
+- Encryption at rest and encrypted backups.
 
 ---
 
 ## 6. Screens
 
 ### Navigation
-- **Phone (primary, < 640px):**
-  - fixed bottom bar: **Home · Supplies · Tasks · Care Team · Assistant**, icon + label, items ≥ 48px tall
-  - Assistant hidden without switch 4
-  - floating **Scan** button on Home and Supplies
-- **Computer (≥ 1024px):** existing top tab bar, wider layouts, plus **Overview**.
-- Header:
-  - patient chip (name + initials avatar, distinct color per patient; tap → switcher)
-  - live-status dot
-  - account menu: **My profile**, **Patient profile**, **Members**, **Usage report**, **Computer admin** (computer admin only), **Sign out**
+- **Phone (primary):** bottom bar **Home · Supplies · Care Team · Documents · Assistant**, icon + label, items ≥ 48px tall.
+  - Care only sees **Home · Supplies · Care Team**.
+  - Tasks open from Home ("Issues & tasks") and the menu.
+- **Computer:** same items in the existing top tab bar, plus **Overview**.
+- Header: patient chip (tap → switcher), live dot, menu: **My profile**, **Patient profile**, **Members**, **Tasks**, **Usage report**, **Computer admin** (computer admin only), **Sign out**.
 - Removed as tabs:
   - Dashboard → Home
-  - Scan → floating button/sheet
+  - Scan → Home/Supplies button
   - Portal → Overview; `?view=portal` redirects there
-  - Users → Computer admin › Accounts
   - Activity → Supplies › History
+  - Users → Computer admin
 
 ### Screen list
-1. **Welcome / first run.** Setup-code field, then Create account.
-2. **Sign in.** Username, then PIN keypad or password field. "Remember username on this device". **Create account** and **I have an invite or share code** links. Errors for a wrong secret and for lockout.
-3. **Create account.** Name, title (suggestions + free text), username, PIN or password.
-4. **No patients yet.** Big buttons: **I have an invite**, **Ask to join a patient**, **Create a patient profile** ("for me" or "for someone I care for").
-5. **Join with invite.** Who invited you, the patient's first name, the role → Accept → patient Home.
-6. **Ask to join.** Share code (typed or QR), optional message → Send. Then **Waiting for approval** (Cancel request).
-7. **Patient picker.** Cards: name, initials, DOB, low-stock count, "Admin" badge. Search when there are more than 5.
-8. **Add-patient wizard.** Steps in M9.
-9. **Home (phone).**
-   - "Running low" cards (Restock; "Ask assistant to reorder" with switch 4)
-   - "Waiting on you": drafts (switch 2), join requests (admin/delegates), admin-transfer request
-   - "Tracked issues"
-   - "Recent activity" (updates live)
-   - floating Scan button
-10. **Overview (computer portal).** Same blocks as Home, side by side, with full tables. "All my patients" table for users with several patients. All live.
-11. **Supplies.** Search, category filter, low-only, "Alerting items" filter; cards on phone, table on computer. Bell icon on items with alerts on. Live quantities, with a brief highlight on changes made by others.
-12. **Scan sheet.**
-    - Patient name at the top.
-    - Input: live camera, photo, or manual code.
-    - Found: **Used / Restocked / Counted**, −/+ stepper, note, Save.
-    - Not found: "Add new supply with this barcode" (switch 5) or "Not found".
-13. **Supply detail.**
-    - Fields and live quantity.
-    - Used / Restocked / Set exact count (reason).
-    - With switch 5: **Alert when low** + threshold, Edit, Archive.
-    - Item history.
-14. **Supplies › History.** Full log, live, filter by item and by person ("Name (Title)").
-15. **Usage report.** Date range, include-insurance (switch 1), Print / Save as PDF.
-16. **Care Team.** Existing screen. Account #s and notes need switch 1. Edit, delete and NPI search need switch 7.
-17. **Tasks.** Existing list. Editing needs switch 6; everyone can tick steps. "Notify me about updates" on provider-linked tasks.
-18. **Assistant.** Existing chat. The Outbox/Inbox panel needs switch 2 and the Send button needs switch 3. Also:
-    - first-use notice
-    - consent banner
-    - provider-update confirm card
-    - background jobs
-19. **Patient profile.** Identity, Clinical, Contact & insurance (switch 1). Editing needs switch 7. Shows "Patient admin: [Name (Title)]". Patient admin also sees:
-    - **AI sharing** (switches, consent capacity, history)
-    - **Transfer admin**
-    - **Archive patient**
-20. **Members.** Everyone sees the list: patient admin at the top with an "Admin" badge, then members with name, title, role and a "Can manage people" badge where set. Everyone gets **Leave** (the admin must transfer first).
-    - **Patient admin** also sees:
-      - **Requests** (Accept → role/preset/switches sheet; Deny)
-      - **Open invites**, **Invite someone**
-      - **Join requests**: on/off, share code large, QR, Share, **New code**
-      - per person: **Permissions** sheet (role, preset, switches 1-8 with one-line explanations), **Make patient admin**, **Remove**
-      - "Joined recently" highlight for 7 days
-      - "Pending admin transfer" card (Cancel)
-    - **Delegates** see Requests, Open invites, Invite someone, and Permissions/Remove for ordinary members only. They see no switch 8, no share-code control, and no admin actions.
-21. **Admin transfer request** (for the chosen person). What it means; **Accept** / **Decline**.
-22. **My profile.** Name, title, username, change PIN/password, idle sign-out, My patients (switcher + search), **Notifications** per patient.
-23. **Computer admin.** Separate area, labelled "Computer admin: keeps MediTrack running. No access to patient information."
-    - **Accounts:** unlock, reset secret, deactivate/reactivate, computer-admin flag; can't remove the last one
-    - **Settings:** allow new accounts; assistant, web search and inbox reading on/off; email and connection status; Backup; Restore
-    - **Audit log**
-    - **Patient-admin recovery** (patient → existing member → reason → Reassign)
+1. **Welcome / first run**: setup code → Create account.
+2. **Sign in**: username → PIN keypad or password. **Create account**, **I have an invite** links.
+3. **Create account**: name, title, username, PIN or password.
+4. **No patients yet**: **Enter invite code**, **Create a patient profile**.
+5. **Join with invite**: who invited you, the patient's first name, access level → **Accept**.
+6. **Home (phone)**, top to bottom:
+   - **Quick contacts:** up to 4 favorite providers, each with **Call** and, for DME/pharmacy with email, **Send order**
+   - **Waiting on you:** new DME replies (**Draft reply** / **Reply**), drafts to approve (**Send**)
+   - **Running low:** cards with **−1 / +** and **Restocked**
+   - **Issues & tasks:** next 3 open tasks; "See all" → Tasks
+   - Two big buttons: **Scan supply** · **Scan document**
+   - Care only sees Quick contacts (Call only), Running low, Issues & tasks (tick only) and **Scan supply**.
+7. **Overview (computer portal)**: the Home blocks side by side with full tables. With several patients, an "All my patients" table (low items, replies waiting). Live.
+8. **Supplies**: search, category filter, low-only toggle. Cards with name, live qty, status, bell if alerting, and **−1 / +** quick buttons. Tap → Supply detail. "+ Add supply" (Full).
+9. **Scan supply sheet**: patient name; live camera or photo or manual code → found: **Used** / **Restocked** (amount stepper, default 1), saves on tap with Undo → not found: "Add new supply with this barcode" (Full).
+10. **Supply detail**: qty, **Set exact count**, history; Full: **Alert when low** + threshold, Edit, Archive.
+11. **Supplies › History**: log by item/person ("Name (Title)").
+12. **Care Team**: existing cards, favorites first, search. Card actions: **Call**, **Send order** (DME/pharmacy with email; Full + Email), "…" (Show what to say, Ask assistant, Edit, Delete). Care only: no account #s/notes/edit.
+13. **Documents** (Full): filter chips (All · Orders · LMN · Insurance · Other), doctor dropdown, newest first, expiry badges. Big **Scan** and **Upload** buttons. "…" → Recently deleted.
+14. **Scan document flow**: camera → thumbnail strip (**Add page** / **Done**; drag to reorder; tap to delete; "document look" toggle) → **Tag** form (purpose, doctor, date, optional title, optional renew-by) → **Save** → result screen with **Send to [last DME]** and **Done**.
+15. **Document view**: PDF full screen; **Send to…**; "…" Edit tags, Download, Delete (patient admin also: Delete permanently).
+16. **Draft (Outbox item)**: To, Subject, Body, **Attachments** (chips with ✕ and **Add document**), **Send** (confirm). Without SMTP: **Download attachment** + **Open in my email app**.
+17. **Assistant** (Full): existing chat, plus the Outbox/Inbox panel (Email switch).
+    - Inbox items: **Reply**, **Ask assistant about this**.
+    - Consent banner when data isn't shared.
+    - Provider-update confirm card.
+18. **Tasks**: existing list + edit (Full); tick steps (all).
+19. **Patient profile**: identity, clinical, contact & insurance (Full); "Patient admin: Name (Title)". Patient admin: **AI sharing** (two switches + "I am the patient / the patient's representative" + history), **Archive patient**.
+20. **Members**: list (admin badge, title, access level, Email on/off). Patient admin: **Invite** (level, Email → code/QR/Share), tap a person → change level / Email switch / **Remove**. Others: **Leave**.
+21. **Usage report**: date range → Print / Save as PDF.
+22. **My profile**: name, title, change PIN/password, my patients, notifications (Low stock, Assistant updates per patient).
+23. **Computer admin** (labelled "Keeps MediTrack running. No access to patient information."):
+    - Accounts: unlock, reset secret, deactivate
+    - Settings: allow new accounts; assistant, web search, inbox reading; email and connection status; storage used; Backup; Restore; Export audit log (CSV)
+    - **Patient admin**: reassign, with a reason
 
 ---
 
 ## 7. Data
 
-Migrations run in order using `PRAGMA user_version`. Existing installs keep their data. Changing `supplies.barcode` uniqueness requires a SQLite table rebuild inside a transaction.
+Migrations use `PRAGMA user_version`. Existing installs keep their data. Changing `supplies.barcode` uniqueness needs a table rebuild inside a transaction.
 
 ### New tables
 ```
-organizations(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
+organizations(id INTEGER PK, name TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'household' CHECK(type IN ('household','agency','clinic')),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)  -- MVP: exactly one row, type 'household'.
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)        -- MVP: one row, no UI
 
-patients(                                   -- replaces patient_profile; same fields
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id INTEGER NOT NULL REFERENCES organizations(id),
-  admin_user_id INTEGER NOT NULL REFERENCES users(id),   -- the ONE patient admin
+patients(                                               -- replaces patient_profile
+  id INTEGER PK, org_id INTEGER NOT NULL REFERENCES organizations(id),
+  admin_user_id INTEGER NOT NULL REFERENCES users(id),  -- the ONE patient admin
   name TEXT NOT NULL, dob TEXT,
   parent_name TEXT, parent_phone TEXT, parent_email TEXT,
   address TEXT, city TEXT, state TEXT, zip TEXT,
-  insurance_name TEXT, insurance_member_id TEXT, medicaid_id TEXT,   -- switch 1 / identity_admin scope
-  diagnoses TEXT, equipment TEXT, notes TEXT,                        -- baseline / clinical scope
-  share_code TEXT UNIQUE,                    -- join-request code; shown only to the patient admin
-  join_requests_enabled INTEGER NOT NULL DEFAULT 0,
-  onboarded INTEGER NOT NULL DEFAULT 0,
-  archived INTEGER NOT NULL DEFAULT 0,
-  version INTEGER NOT NULL DEFAULT 1,
-  created_by INTEGER REFERENCES users(id),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)  -- invariant: admin_user_id always has an active patient_members row for this patient
+  insurance_name TEXT, insurance_member_id TEXT, medicaid_id TEXT,   -- Full access; identity_admin scope
+  diagnoses TEXT, equipment TEXT, notes TEXT,                        -- clinical scope
+  onboarded INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1, created_by INTEGER REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)
 
 patient_members(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  id INTEGER PK, patient_id INTEGER NOT NULL REFERENCES patients(id),
   user_id INTEGER NOT NULL REFERENCES users(id),
-  role TEXT NOT NULL CHECK(role IN ('self','family','nurse','doctor')),   -- 'doctor' reserved
-  perm_insurance INTEGER NOT NULL DEFAULT 1,     -- 1 Insurance & account numbers
-  perm_inbox INTEGER NOT NULL DEFAULT 1,         -- 2 Email inbox & outbox
-  perm_send_email INTEGER NOT NULL DEFAULT 1,    -- 3 Send email (requires perm_inbox)
-  perm_assistant INTEGER NOT NULL DEFAULT 1,     -- 4 AI assistant
-  perm_edit_supplies INTEGER NOT NULL DEFAULT 1, -- 5 Edit supply list
-  perm_manage_tasks INTEGER NOT NULL DEFAULT 1,  -- 6 Manage tasks
-  perm_edit_profile INTEGER NOT NULL DEFAULT 1,  -- 7 Edit profile & care team
-  perm_manage_people INTEGER NOT NULL DEFAULT 0, -- 8 Manage people (delegate); only the admin sets it
-  -- for the patient admin all perm_* are treated as 1 regardless of stored values
+  role TEXT NOT NULL CHECK(role IN ('self','family','nurse','doctor')),   -- label; 'doctor' reserved
+  access_level TEXT NOT NULL DEFAULT 'full' CHECK(access_level IN ('full','care')),
+  email_access INTEGER NOT NULL DEFAULT 1,       -- the Email switch (only meaningful for 'full')
   notify_low_stock INTEGER NOT NULL DEFAULT 1,
   notify_assistant INTEGER NOT NULL DEFAULT 1,
-  notify_tasks INTEGER NOT NULL DEFAULT 0,
-  joined_via TEXT CHECK(joined_via IN ('creator','invite','request','migration')),
-  invite_id INTEGER REFERENCES invites(id),
-  join_request_id INTEGER REFERENCES join_requests(id),
-  added_by INTEGER REFERENCES users(id),
+  joined_via TEXT CHECK(joined_via IN ('creator','invite','migration','reassign')),
+  invite_id INTEGER REFERENCES invites(id), added_by INTEGER REFERENCES users(id),
   version INTEGER NOT NULL DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  removed_at DATETIME, removed_by INTEGER REFERENCES users(id)
-)  -- partial UNIQUE index on (patient_id, user_id) WHERE removed_at IS NULL
+  removed_at DATETIME, removed_by INTEGER REFERENCES users(id))
+  -- partial UNIQUE (patient_id, user_id) WHERE removed_at IS NULL
+  -- the patient admin always has an active row and is treated as full + email regardless of stored values
 
 invites(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  id INTEGER PK, patient_id INTEGER NOT NULL REFERENCES patients(id),
   code_hash TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL CHECK(role IN ('family','nurse')),
-  perms_json TEXT NOT NULL,                    -- switches 1-7 (and 8 only if created by the admin)
-  label TEXT,
+  access_level TEXT NOT NULL CHECK(access_level IN ('full','care')),
+  email_access INTEGER NOT NULL DEFAULT 1,
   created_by INTEGER NOT NULL REFERENCES users(id),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  expires_at DATETIME NOT NULL,                -- +72h
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL,   -- +72h
   status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','used','cancelled','expired')),
-  used_by INTEGER REFERENCES users(id), used_at DATETIME
-)
+  used_by INTEGER REFERENCES users(id), used_at DATETIME)
 
-join_requests(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id INTEGER NOT NULL REFERENCES patients(id),
-  requester_id INTEGER NOT NULL REFERENCES users(id),
-  message TEXT,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK(status IN ('pending','accepted','denied','cancelled','expired')),
-  block_future INTEGER NOT NULL DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  expires_at DATETIME NOT NULL,                -- +14 days
-  decided_by INTEGER REFERENCES users(id), decided_at DATETIME
-)  -- partial UNIQUE index on (patient_id, requester_id) WHERE status = 'pending'
+documents(
+  id INTEGER PK, patient_id INTEGER NOT NULL REFERENCES patients(id),
+  purpose TEXT NOT NULL DEFAULT 'order' CHECK(purpose IN ('order','lmn','insurance_approval','other')),
+  provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,   -- the doctor
+  doc_date TEXT NOT NULL,                       -- YYYY-MM-DD, default today
+  title TEXT, renew_by TEXT,                    -- optional
+  pages INTEGER, size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL,
+  original_filename TEXT,                       -- shown only in the app; never in URLs
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME, deleted_by INTEGER REFERENCES users(id),   -- Recently deleted
+  version INTEGER NOT NULL DEFAULT 1)
+  -- index (patient_id, deleted_at, doc_date DESC)
 
-admin_transfers(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id INTEGER NOT NULL REFERENCES patients(id),
-  from_user_id INTEGER REFERENCES users(id),   -- previous admin
-  to_user_id INTEGER NOT NULL REFERENCES users(id),
-  kind TEXT NOT NULL CHECK(kind IN ('transfer','recovery')),
-  started_by INTEGER NOT NULL REFERENCES users(id),  -- admin, or computer admin for recovery
-  reason TEXT,                                 -- required for recovery
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','declined','cancelled','expired')),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  expires_at DATETIME NOT NULL,                -- +7 days
-  decided_at DATETIME
-)  -- at most one pending row per patient
+document_files(
+  document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+  pdf BLOB NOT NULL,                            -- always a PDF, max 20 MB
+  thumb BLOB)                                   -- small JPEG of page 1 when scanned in-app
+
+outbox_attachments(
+  id INTEGER PK, outbox_id INTEGER NOT NULL REFERENCES outbox(id) ON DELETE CASCADE,
+  document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  filename TEXT NOT NULL)                       -- kept after the document is purged
 
 ai_consents(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  id INTEGER PK, patient_id INTEGER NOT NULL REFERENCES patients(id),
   scope TEXT NOT NULL CHECK(scope IN ('clinical','identity_admin')),
-  granted_by INTEGER NOT NULL REFERENCES users(id),   -- always the patient admin at that time
+  granted_by INTEGER NOT NULL REFERENCES users(id),
   granted_as TEXT NOT NULL CHECK(granted_as IN ('patient','representative')),
   granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  revoked_by INTEGER REFERENCES users(id),
-  revoked_at DATETIME
-)  -- active = row for patient+scope with revoked_at NULL. Never deleted.
+  revoked_by INTEGER REFERENCES users(id), revoked_at DATETIME)   -- never deleted
 
-sessions(
-  id TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  last_seen_at DATETIME, expires_at DATETIME NOT NULL
-)
+sessions(id TEXT PK, user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME, expires_at DATETIME NOT NULL)
 
-audit_log(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id INTEGER REFERENCES organizations(id),
-  patient_id INTEGER REFERENCES patients(id),
-  user_id INTEGER REFERENCES users(id),
-  action TEXT NOT NULL,
-  entity TEXT, entity_id INTEGER,
-  summary TEXT,                              -- short; no diagnoses or IDs
+audit_log(id INTEGER PK, org_id INTEGER, patient_id INTEGER, user_id INTEGER,
+  action TEXT NOT NULL, entity TEXT, entity_id INTEGER,
+  summary TEXT,                                 -- short; no diagnoses, IDs or document titles
   via_assistant INTEGER NOT NULL DEFAULT 0,
-  via_delegate INTEGER NOT NULL DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)  -- append-only
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)  -- append-only
 
 app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)
   -- allow_signups, assistant_enabled, assistant_web_search, inbox_reading_enabled,
   -- inbox_last_uid, vapid_public_key, vapid_private_key
 
-push_subscriptions(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  endpoint TEXT NOT NULL UNIQUE, keys_json TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
+push_subscriptions(id INTEGER PK, user_id INTEGER NOT NULL REFERENCES users(id),
+  endpoint TEXT NOT NULL UNIQUE, keys_json TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)
 ```
-Live-sync event buffers are in memory only (no table).
 
 ### Changed tables
-**users**
-- Add: `org_id`, `username TEXT UNIQUE`, `title TEXT`
-- Add: `secret_type TEXT CHECK(secret_type IN ('pin','password'))`, `secret_hash TEXT` (`scrypt$<salt>$<hash>`), `must_reset_secret`
-- Add: `is_computer_admin INTEGER DEFAULT 0`, `active INTEGER DEFAULT 1`, `idle_minutes INTEGER`
-- Add: `failed_attempts`, `locked_until`, `last_login_at`
-- The old `role` and `pin_hash` columns are no longer read; the migration clears `pin_hash`.
+- **users**: add `org_id`, `username UNIQUE`, `title`, `secret_type ('pin'|'password')`, `secret_hash` (`scrypt$salt$hash`), `must_reset_secret`, `is_computer_admin`, `active`, `failed_attempts`, `locked_until`, `last_login_at`. Old `role` and `pin_hash` are no longer read; `pin_hash` is cleared.
+- **supplies**: add `patient_id NOT NULL`, `archived`, `alert_enabled DEFAULT 0`, `alert_sent_at`, `version`. Barcode `UNIQUE(patient_id, barcode)`. Quantity changes only via movements.
+- **scan_log**: add `patient_id`, `quantity_before`, `quantity_after`, `reason`; action adds `'adjust'`; `user_id` from session.
+- **providers**: add `patient_id`, `version`.
+- **tasks**: add `patient_id`, `created_by`, `version`; steps get stable `id`s.
+- **outbox**: add `patient_id`, `created_by`, `sent_by`, `version`, `channel TEXT NOT NULL DEFAULT 'email' CHECK(channel IN ('email','fax'))`, `to_fax TEXT`.
+- **patient_profile**: replaced by `patients`; dropped after migration.
 
-**supplies**
-- Add: `patient_id NOT NULL`, `archived`, `alert_enabled INTEGER NOT NULL DEFAULT 0`, `alert_sent_at DATETIME`, `version INTEGER NOT NULL DEFAULT 1`.
-- Barcode becomes `UNIQUE(patient_id, barcode)`.
-- `quantity` changes only via movements (M6).
-
-**scan_log**: add `patient_id`, `quantity_before`, `quantity_after`, `reason`; the action CHECK adds `'adjust'`; `user_id` comes from the session.
-**providers**: add `patient_id`, `version` (sharing across siblings: Open decision 6).
-**tasks**: add `patient_id`, `created_by`, `notify_updates INTEGER NOT NULL DEFAULT 0`, `version`. Each step in `steps` JSON gets a stable `id`.
-**outbox**: add `patient_id`, `created_by`, `sent_by`, `version`.
-**patient_profile**: replaced by `patients`; dropped after migration.
-
-### Migration from the current version (v0 → v1)
-1. Create one `organizations` row ("My household").
-2. Create a `patients` row from `patient_profile` if it has a name or `onboarded = 1`, or if any supplies, providers or tasks exist. If there is no name, use "My child".
-3. Set `patient_id` on all existing rows; `version = 1`; give task steps ids.
-4. Existing users: kept for history, `active = 0`, `pin_hash` cleared.
-5. Because `admin_user_id` is NOT NULL, the migrated patient is created **during** first run, not before. Steps 2-3 run right after the first account is created (M4 first run). That account becomes computer admin and the migrated patient's patient admin (`joined_via = 'migration'`, role `family`).
-6. Existing supplies are kept, with `alert_enabled = 0`. Show a one-time prompt: "Choose which items should alert you."
+### Migration v0 → v1
+1. Create the `organizations` row.
+2. Existing users: kept for history, `active = 0`, `pin_hash` cleared.
+3. First run (setup code) creates the first account (computer admin).
+4. **Then**, in the same step: if `patient_profile` has a name or `onboarded = 1`, or any supplies/providers/tasks exist, create a `patients` row from it ("My child" if unnamed). `admin_user_id` = the new account; the member row is `joined_via = 'migration'`, role `family`, `full`.
+5. Set `patient_id` and `version = 1` on all existing rows; give task steps ids; supplies get `alert_enabled = 0`.
+6. One-time prompt: "Choose which items should alert you when low."
 
 ### Timestamps
-The API returns ISO-8601 UTC; the client shows local time.
+ISO-8601 UTC in the API; local time in the client.
 
 ---
 
 ## 8. Privacy and security
 
-1. **Where data lives:** `server/meditrack.db` on the home computer, plus downloaded backups. Recommend disk encryption (BitLocker / FileVault) and a computer login password.
-2. **Who can reach it:** depends on Open decision 1. In every option, every API call and live stream needs a signed-in session, and patient data needs a membership.
-3. **One accountable owner per patient:** a single patient admin. Delegation is explicit (switch 8), limited (no escalation, no consent, no admin changes) and audited. Admin changes need the new admin's acceptance. Recovery by the computer admin is limited to existing members, needs a reason, and is audited and visible to members.
-4. **Joining is safe by design:**
+1. **Where data lives:** `server/meditrack.db` on the home computer (including documents), plus downloaded backups. Recommend disk encryption (BitLocker / FileVault) and a computer login password.
+2. **Who can reach it:** depends on Open decision 1. Every API call and live stream needs a session; patient data needs a membership.
+3. **One accountable owner per patient** (patient admin). Reassignment only by the computer admin, only to an existing member, with a reason, audited and notified.
+4. **Joining:**
    - new accounts see nothing
-   - patients are never searchable or listed to non-members
-   - invites are single-use and announced to the patient admin
-   - join requests need a share code the family handed out, which is off by default and can be turned off or replaced
-   - requests reveal nothing until accepted
+   - patients are never searchable
+   - invites are single-use, short-lived and announced to the patient admin
    - sign-up and code entry are rate-limited
    - first run is protected by a setup code shown only on the computer
-5. **Per-person permissions** (M3), enforced in the server, with field stripping. Changes take effect immediately, including on live streams. The computer admin has no patient access.
-6. **Authentication:** individual accounts; PIN or password, both scrypt-hashed; lockout; idle sign-out; `HttpOnly` + `SameSite=Strict` (+ `Secure`) cookies.
-7. **Browser attacks:**
-   - no CORS; origin check on state-changing requests
+5. **Access levels** (M3), enforced on the server with field stripping. Changes apply immediately, including on live streams. The computer admin has no patient access.
+6. **Documents** are treated as sensitive medical information:
+   - Full access only
+   - stored in the database, served only through permission-checked endpoints with `no-store`
+   - never in the static folder, never named after the patient in URLs
+   - every view and download is audited
+   - recoverable delete for 30 days, then purged; the patient admin can delete permanently at once
+7. **Authentication:** PIN or password, scrypt-hashed; lockout; 12 h idle sign-out; `HttpOnly` + `SameSite=Strict` (+ `Secure`) cookies.
+8. **Browser attacks:**
+   - no CORS; origin check
    - no runtime third-party scripts
-   - headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`
-   - CSP `'self'` (plus `'unsafe-eval'` while in-browser Babel remains)
-8. **In transit:** depends on Open decision 1; Settings shows whether the connection is encrypted.
-9. **Live sync:** events carry ids and baseline fields only. Sensitive data is always refetched through permission-checked endpoints.
-10. **AI provider:**
-    - patient data only with consent recorded by the patient admin (as patient or representative), per patient, revocable, off by default
-    - use also needs switch 4
-    - the assistant never sends email
-    - provider edits need confirmation
-    - email content is treated as untrusted
-11. **Email (recommendation):** connect MediTrack to a **separate email address used only for care and supply companies**, not a personal inbox. Set this up in the README and first-run tips. The patient admin controls who can read it (switch 2) and send from it (switch 3).
-12. **Push notifications:** generic text only (M17).
-13. **Audit:** M16, append-only, including every permission change, delegate action, transfer and recovery.
-14. **Secrets:** `.env` stays out of git (document that it holds the email app password). VAPID keys live in `app_settings`. The share code is shown only to the patient admin.
-15. **Logs:** the server console never prints request bodies, profile data, email contents, invite codes or share codes.
-16. **No compliance claims:** do not claim HIPAA compliance anywhere.
+   - headers: `nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`
+   - CSP `'self'` (+ `'unsafe-eval'` while in-browser Babel remains)
+   - uploads checked by content type
+9. **AI provider:**
+   - patient data, including document metadata, only with consent recorded by the patient admin, off by default, revocable
+   - no document contents in MVP
+   - never sends email; attachments need a human Send
+   - email content treated as untrusted
+10. **Email:** use a separate care-only address (recommended setup). The Email switch controls who can read and send.
+11. **Push:** generic text only.
+12. **Audit:** append-only, written for every sensitive action; CSV export.
+13. **Secrets:** `.env` out of git (document that it holds the email app password); VAPID keys in `app_settings`.
+14. **Logs:** the server console never prints request bodies, profile data, email contents, document data or codes.
+15. **No compliance claims:** do not claim HIPAA compliance anywhere.
 
 ### Path to agency/HIPAA (do not build now; don't block it)
 If an agency or clinic adopts MediTrack it would likely bring HIPAA obligations. At minimum:
 - Hosting with a signed Business Associate Agreement (BAA).
-- BAAs with the AI, email, tunnel and push providers that handle patient data, or those features turned off.
-- A risk assessment, written policies, staff training and breach-notification procedures.
-- Encryption at rest and in transit, encrypted backups, defined retention.
-- Unique user IDs, automatic logoff, access control and audit controls. **The MVP already provides these (M2, M3, M16), and per-person switches support "minimum necessary" access.**
-- Organization separation: `org_id` is already on users, patients and the audit log.
-- Organization admins managing staff; agency-level invites, join requests and delegation.
-- 2-step sign-in and internet-grade rate limiting if hosted.
-- Consent records (the `ai_consents` pattern) extended to other disclosures.
+- BAAs with the AI, email, tunnel, push and (later) fax providers, or those features turned off.
+- A risk assessment, policies, training and breach-notification procedures.
+- Encryption at rest and in transit, encrypted backups, retention rules.
+- MVP already provides: unique user IDs, automatic logoff, access control, audit logging, and `org_id` separation.
+- 2-step sign-in and stricter rate limiting if hosted. Finer permission switches (Later) support "minimum necessary".
 
 ---
 
 ## 9. Visual style
 
-**Keep** the current look: navy/blue header, white cards on light gray, colored category and status badges, teal accent.
+**Keep** the current look: navy/blue header, white cards on light gray, colored badges, teal accent. It is calm and readable.
 
-**Change, for phone-first use and accessibility:**
-1. Bottom navigation on phones and a floating Scan button. Inline SVG icons + labels.
-2. Touch targets ≥ 44px on phones. Primary actions at the bottom, within thumb reach.
+**Change, for phone-first simplicity:**
+1. Bottom navigation; inline SVG icons + labels.
+2. Touch targets ≥ 44px; the main action at the bottom of the screen; secondary actions in "…".
 3. Inputs at 16px on phones.
-4. Tables become stacked cards under 640px; tables stay on the computer Overview.
-5. Text contrast: replace `--gray-500` with `--gray-700` for text.
-6. Status = text + color. Red = out / error, orange = low / needs action, green = OK / done, blue = info.
-7. Header patient chip on every patient screen. People always shown as "Name (Title)". The patient admin gets an "Admin" badge; delegates get "Can manage people".
-8. Live changes: a brief soft highlight (about 1 s) on a value someone else just changed, plus "by Sam" on tap. No pop-ups for routine updates.
-9. Permissions sheet: each switch with a one-line plain explanation. Presets as two large buttons at the top. Switch 8 visually separated, with a short note on what delegates can't do.
-10. Large, high-contrast codes and QR codes on the invite and share-code screens.
-11. Web app manifest + icon (also required for iPhone notifications).
+4. Cards instead of tables under 640px.
+5. Text contrast: `--gray-700` instead of `--gray-500` for text.
+6. One status palette: red = out / error, orange = low / needs action, green = OK / done, blue = info. Always text + color.
+7. Patient chip on every patient screen; people shown as "Name (Title)".
+8. Undo toasts instead of confirm dialogs, except for sending email and permanent delete.
+9. Soft highlight on values someone else just changed.
+10. Documents: purpose badges in the status palette's neutral colors; large page thumbnails in the scan flow.
+11. Web app manifest + icon (also needed for iPhone notifications).
 
 ---
 
 ## 10. Open decisions
 
-Plain-language questions for the owner. The spec's current default is shown after each one. The most important come first.
+Plain-language questions for the owner, most important first. The spec's current default is in italics.
 
-1. **How should phones connect to MediTrack?** MediTrack runs on your home computer. Phones need a secure connection to it for two things: scanning barcodes with the live camera, and getting notifications. Without one, scanning still works by taking a photo of the barcode, live updates still work, but notifications don't. The app works with all four options, so you can start with option 1 and switch later.
+1. **How should phones connect to MediTrack?** MediTrack runs on your home computer. A secure connection is needed for live barcode scanning and for notifications. Without one, everything else works: photo-based barcode scanning, **scanning documents with the camera**, and live updates. The app works with all four options, so you can start with option 1 and switch later.
 
    | | 1. Home Wi-Fi only (as today) | 2. Private network app | 3. Security certificate on each phone | 4. Public web address |
    |---|---|---|---|---|
-   | Day to day | Works only at home on your Wi-Fi. Scan by taking a photo. No notifications. | Works at home and away. Live scanning and notifications. | Works only at home. Live scanning and notifications. | Works anywhere, like a normal website. Live scanning and notifications. |
-   | What gets installed | Nothing. | A free app (e.g. Tailscale) on the home computer and on **every phone** that uses MediTrack, including each nurse's phone. | A security file on the computer and on **every phone**. Several steps in iPhone Settings, repeated for each new nurse's phone. | Nothing on phones. A small program on the home computer. |
+   | Day to day | Home only. Barcodes by photo. Document scanning works. **No notifications.** | Home and away. Everything works. | Home only. Everything works. | Anywhere. Everything works. |
+   | What gets installed | Nothing. | A free app (e.g. Tailscale) on the home computer and **every phone**, including each nurse's. | A security file on the computer and **every phone**; several steps on iPhone; repeat for each new nurse. | Nothing on phones; a small program on the home computer. |
    | Cost | Free | Usually free for a family; check the plan's limits if many people need access. | Free, but needs someone comfortable with tech settings. | Roughly $10-20 a year for a web address, or a monthly hosting fee. |
-   | Main downside | No notifications; not encrypted on Wi-Fi. | Nurses must agree to install an app; some agencies may not allow it on work phones. | Fiddly, home-only, redone for each new phone. | Reachable from the internet (sign-in still protects it); a company in the middle carries the traffic; stronger sign-in recommended. |
+   | Main downside | No notifications; not encrypted on Wi-Fi. | Nurses must agree to install an app. | Fiddly; redo for every new phone. | Reachable from the internet (sign-in still protects it); a company in the middle carries the traffic. |
 
    *Default: option 1 until you decide; option 2 recommended.*
 
-2. **Are these the right permission switches?** For each person, the patient admin can turn these on or off:
-   1. insurance & account numbers
-   2. reading the care email
-   3. sending email
-   4. the AI assistant
-   5. editing the supply list
-   6. managing tasks
-   7. editing the profile & care team
-   8. managing people (the "delegate" switch)
-
-   Everyone linked can always see supplies, log use, see phone numbers and tick task steps. *Default: 1-7 on for family and nurses, 8 off; one-tap "Hands-on care only" option.* Should a delegate be able to remove family members too, or only nurses and aides? *Default: any ordinary member.*
-3. **What should AI permission cover?** *Default: two separate switches, both off at first, set only by the patient admin. "Medical info" covers diagnoses, equipment, notes and the supply list. "Personal & insurance info" covers name, birth date, address, insurance numbers and the care team list.* Is that split right?
-4. **How long before the app signs people out when idle?** *Default: family 12 hours, nurses 30 minutes; each person can shorten their own.* Should nurses also get 12 hours?
+2. **Invites only for now?** You asked that a nurse could request access and you'd accept or deny it. To keep things simple, the MVP has only invites: you send the nurse a code or link and they're in, and you can remove them with one tap. *Default: invites only; "request to join" comes later.* OK, or is the request flow needed from day one?
+3. **Two access levels instead of many switches?** *Default: "Full access" (same as you, the default for family and nurses) or "Care only" (supplies, phone numbers, tasks; no insurance, documents, email or AI), plus one switch to keep someone out of the email.* Enough for now?
+4. **What should AI permission cover?** *Default: two switches, both off, set only by you as patient admin. "Medical info" covers diagnoses, equipment, notes, supply list and document names. "Personal & insurance info" covers name, birth date, address, insurance numbers and care team.* Is that split right?
 5. **Resupply schedule** (how many of each item insurance allows per month, next order date): needed for the first family, or later? *Default: later.*
-6. **Siblings and providers:** enter a shared pharmacy or supply company once for the household, or separately for each child? *Default: separately.*
-7. **Call scripts:** *Default: use the child's name, never "he/she".* Keep, or let families choose pronouns?
-8. **Starter supply list:** OK to offer the existing 35 trach / vent / G-tube items with counts at 0 and no alerts on?
-9. **Nurses who work for two families:** each family runs its own MediTrack, so the nurse has two separate logins. OK until there's an agency version?
+6. **Sign-out time:** *Default: everyone stays signed in for 12 hours of inactivity.* OK, or should nurses be signed out sooner?
+7. **Documents for "Care only" people:** *Default: they can't see documents, because orders and insurance letters are sensitive.* Should they be able to view (not send) doctor's orders?
+8. **Siblings and providers:** enter a shared pharmacy or supply company once for the household, or separately per child? *Default: separately.*
+9. **Call scripts:** *Default: the child's name, never "he/she".* Keep, or let families choose pronouns?
+10. **Starter supply list:** OK to offer the existing 35 trach / vent / G-tube items with counts at 0 and no alerts?
+11. **Nurses who work for two families:** two separate logins (one per family's MediTrack). OK until there's an agency version?
