@@ -5,6 +5,7 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const db = require('./db');
+const macos = require('./macos');
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(cors());
@@ -141,8 +142,11 @@ const server = app.listen(PORT, () => {
   console.log('  On this computer:  ' + url);
   for (const ip of lanAddresses()) console.log('  On your phone (same Wi-Fi):  http://' + ip + ':' + PORT);
   console.log('');
-  console.log('  Keep this window open while you use MediTrack. Close it to stop.');
+  if (process.env.MEDITRACK_LOG_DIR) console.log('  Running in the background. It starts by itself when you log in to this Mac.');
+  else console.log('  Keep this window open while you use MediTrack. Close it to stop.');
   console.log('');
+  macos.startLogRotation();
+  macos.keepAwake();
   openBrowser(url);
 });
 server.on('error', e => {

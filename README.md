@@ -24,6 +24,35 @@ A home app for families caring for a medically complex child. It covers:
 
 The first launch takes a minute to set itself up. After that, MediTrack opens in your browser automatically. Keep the black window open while you use it; close it to stop MediTrack.
 
+### Mac: run MediTrack in the background (recommended)
+
+So that phones and email alerts work all day, MediTrack should run by itself on the Mac.
+
+1. Double-click **`Install MediTrack.command`** once (same right-click → **Open** trick the first time).
+2. It sets up everything, starts MediTrack in the background and opens it in your browser. You can close its window.
+3. From now on MediTrack:
+   - starts by itself when you log in to the Mac
+   - restarts by itself if it ever crashes
+   - keeps the Mac from going to sleep on its own while it runs (the screen can still turn off)
+4. To stop it for good, double-click **`Uninstall MediTrack.command`**. It **never deletes your data**.
+
+`Start MediTrack.command` still works for a manual run. If the background copy is already running, it just opens MediTrack in your browser.
+
+Logs (no health details) are in `~/Library/Logs/MediTrack/`.
+
+### Mac: keep the Mac awake
+
+MediTrack can only answer phones and send alerts while the Mac is **on, awake and logged in**.
+
+- **MacBook:** System Settings → **Battery** → **Options…** → turn on **"Prevent automatic sleeping on power adapter when the display is off"**. Optionally also turn on **"Wake for network access"**.
+- **iMac / Mac mini / Mac Studio:** System Settings → **Energy** → turn on **"Prevent automatic sleeping when the display is off"** and **"Start up automatically after a power failure"**.
+- **MacBook lid:** keep the **lid open and the charger plugged in**. A closed lid makes the Mac sleep, and MediTrack can't stop that.
+- **After the Mac restarts, log in once so MediTrack comes back.** With FileVault on, the Mac waits at the login screen after every restart.
+- **macOS updates:** System Settings → General → Software Update → **Automatic updates**: keep security responses on, but turn off **"Install macOS updates"**, so the Mac doesn't restart overnight. Install updates by hand, then log in right away.
+- **Turn on FileVault** (System Settings → Privacy & Security → FileVault) and use a Mac login password.
+
+Menu names differ a little between macOS versions. If you can't find one, search for it in System Settings.
+
 **On your phone:** the black window shows a "On your phone" address like `http://192.168.1.20:3000`. Open it on a phone on the same Wi-Fi, then use **Add to Home Screen** to get an app icon. It works while the computer is on and MediTrack is running.
 
 <details><summary>Advanced: start from a terminal instead</summary>

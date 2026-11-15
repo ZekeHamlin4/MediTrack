@@ -2,6 +2,15 @@
 # MediTrack launcher for Mac. Double-click to start.
 cd "$(dirname "$0")/server" || exit 1
 clear
+
+# If MediTrack is installed as a background service and running, just open it.
+if launchctl print "gui/$(id -u)/com.meditrack.server" >/dev/null 2>&1; then
+  echo "MediTrack is already running in the background. Opening it in your browser..."
+  open "http://localhost:3000"
+  sleep 2
+  exit 0
+fi
+
 echo "Starting MediTrack..."
 
 if ! command -v node >/dev/null 2>&1; then
