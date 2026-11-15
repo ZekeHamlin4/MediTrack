@@ -1,3 +1,6 @@
+const fs = require('fs');
+const envPath = require('path').join(__dirname, '.env');
+if (fs.existsSync(envPath)) process.loadEnvFile(envPath);
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -112,6 +115,9 @@ app.get('/api/dashboard', (req, res) => {
     res.json({totalSupplies,lowStockCount,totalItems,categoryBreakdown,recentScans,lowStockItems});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
+app.use('/api', require('./care').router);
+app.use('/api', require('./email').router);
+app.use('/api', require('./assistant').router);
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/index.html'));
 });

@@ -86,6 +86,53 @@ const seedSupplies = () => {
   ];
   db.transaction(items => { for (const i of items) ins.run(...i); })(data);
 };
+db.exec(`
+  CREATE TABLE IF NOT EXISTS patient_profile (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    child_name TEXT, dob TEXT, parent_name TEXT, parent_phone TEXT, parent_email TEXT,
+    address TEXT, city TEXT, state TEXT, zip TEXT,
+    insurance_name TEXT, insurance_member_id TEXT, medicaid_id TEXT,
+    diagnoses TEXT, equipment TEXT, notes TEXT,
+    onboarded INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT OR IGNORE INTO patient_profile (id) VALUES (1);
+  CREATE TABLE IF NOT EXISTS providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'other',
+    specialty TEXT, contact_person TEXT,
+    phone TEXT, fax TEXT, email TEXT, website TEXT, portal_url TEXT,
+    address TEXT, city TEXT, state TEXT, zip TEXT,
+    npi TEXT, account_number TEXT,
+    departments TEXT NOT NULL DEFAULT '[]',
+    tips TEXT, notes TEXT,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL, description TEXT,
+    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','waiting','done')),
+    due_date TEXT,
+    steps TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    to_email TEXT, subject TEXT NOT NULL, body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','sent','failed')),
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sent_at DATETIME
+  );
+`);
 seedUsers();
 seedSupplies();
 module.exports = db;
