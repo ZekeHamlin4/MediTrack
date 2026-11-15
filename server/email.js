@@ -44,9 +44,9 @@ async function sendDraft(id) {
       from: env('SMTP_FROM') || env('SMTP_USER'),
       to: d.to_email, subject: d.subject, text: d.body,
     });
-    db.prepare("UPDATE outbox SET status='sent', sent_at=CURRENT_TIMESTAMP, error=NULL WHERE id=?").run(id);
+    db.prepare("UPDATE outbox SET status='sent', sent_at=CURRENT_TIMESTAMP, error=NULL, version=version+1 WHERE id=?").run(id);
   } catch (e) {
-    db.prepare("UPDATE outbox SET status='failed', error=? WHERE id=?").run(e.message, id);
+    db.prepare("UPDATE outbox SET status='failed', error=?, version=version+1 WHERE id=?").run(e.message, id);
     throw e;
   }
   return care.getDraft(id);

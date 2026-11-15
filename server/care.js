@@ -78,16 +78,25 @@ function parseProvider(p) {
   return { ...p, departments };
 }
 
+// The profile screens still use one flat object with child_name. Since M1 it lives in the
+// `patients` table (first_name + last_name); the old patient_profile table is kept untouched.
+const { splitName } = require('./migrations');
+const PATIENT_FIELDS = PROFILE_FIELDS.filter(f => f !== 'child_name');
+
 function getProfile() {
-  return db.prepare('SELECT * FROM patient_profile WHERE id = 1').get();
+  const p = db.prepare('SELECT * FROM patients WHERE id = ?').get(db.currentPatientId());
+  if (!p) return p;
+  const child_name = [p.first_name, p.last_name].filter(Boolean).join(' ') || null;
+  return { ...p, child_name };
 }
 
 function updateProfile(fields) {
   const cur = getProfile();
   const next = {};
-  for (const f of PROFILE_FIELDS) next[f] = fields[f] !== undefined ? fields[f] : cur[f];
-  db.prepare(`UPDATE patient_profile SET ${PROFILE_FIELDS.map(f => f + '=?').join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=1`)
-    .run(...PROFILE_FIELDS.map(f => next[f]));
+  for (const f of PATIENT_FIELDS) next[f] = fields[f] !== undefined ? fields[f] : cur[f];
+  const names = fields.child_name !== undefined ? splitName(fields.child_name) : { first_name: cur.first_name, last_name: cur.last_name };
+  db.prepare(`UPDATE patients SET first_name=?, last_name=?, ${PATIENT_FIELDS.map(f => f + '=?').join(',')}, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(names.first_name, names.last_name, ...PATIENT_FIELDS.map(f => next[f]), cur.id);
   return getProfile();
 }
 
@@ -119,8 +128,8 @@ function createProvider(data) {
   if (!data.name) throw new Error('name is required');
   const type = PROVIDER_TYPES.includes(data.type) ? data.type : 'other';
   const vals = PROVIDER_FIELDS.map(f => f === 'type' ? type : f === 'favorite' ? (data.favorite ? 1 : 0) : f === 'source' ? (data.source || 'manual') : (data[f] ?? null));
-  const r = db.prepare(`INSERT INTO providers (${PROVIDER_FIELDS.join(',')},departments) VALUES (${PROVIDER_FIELDS.map(() => '?').join(',')},?)`)
-    .run(...vals, normalizeDepartments(data.departments));
+  const r = db.prepare(`INSERT INTO providers (${PROVIDER_FIELDS.join(',')},departments,patient_id) VALUES (${PROVIDER_FIELDS.map(() => '?').join(',')},?,?)`)
+    .run(...vals, normalizeDepartments(data.departments), db.currentPatientId());
   return getProvider(r.lastInsertRowid);
 }
 
@@ -132,7 +141,7 @@ function updateProvider(id, data) {
   if (!PROVIDER_TYPES.includes(next.type)) next.type = 'other';
   next.favorite = next.favorite ? 1 : 0;
   const departments = data.departments !== undefined ? normalizeDepartments(data.departments) : cur.departments;
-  db.prepare(`UPDATE providers SET ${PROVIDER_FIELDS.map(f => f + '=?').join(',')}, departments=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+  db.prepare(`UPDATE providers SET ${PROVIDER_FIELDS.map(f => f + '=?').join(',')}, departments=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(...PROVIDER_FIELDS.map(f => next[f]), departments, id);
   return getProvider(id);
 }
@@ -166,8 +175,8 @@ function getTask(id) {
 
 function createTask({ title, description, provider_id, due_date, steps, status }) {
   if (!title) throw new Error('title is required');
-  const r = db.prepare('INSERT INTO tasks (title, description, provider_id, due_date, steps, status) VALUES (?,?,?,?,?,?)')
-    .run(title, description || null, provider_id || null, due_date || null, normalizeSteps(steps), ['open', 'in_progress', 'waiting', 'done'].includes(status) ? status : 'open');
+  const r = db.prepare('INSERT INTO tasks (title, description, provider_id, due_date, steps, status, patient_id) VALUES (?,?,?,?,?,?,?)')
+    .run(title, description || null, provider_id || null, due_date || null, normalizeSteps(steps), ['open', 'in_progress', 'waiting', 'done'].includes(status) ? status : 'open', db.currentPatientId());
   return getTask(r.lastInsertRowid);
 }
 
@@ -175,7 +184,7 @@ function updateTask(id, data) {
   const cur = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
   if (!cur) return null;
   const status = ['open', 'in_progress', 'waiting', 'done'].includes(data.status) ? data.status : cur.status;
-  db.prepare('UPDATE tasks SET title=?, description=?, provider_id=?, due_date=?, status=?, steps=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(
+  db.prepare('UPDATE tasks SET title=?, description=?, provider_id=?, due_date=?, status=?, steps=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(
     data.title ?? cur.title, data.description ?? cur.description,
     data.provider_id !== undefined ? (data.provider_id || null) : cur.provider_id,
     data.due_date ?? cur.due_date, status,
@@ -191,8 +200,8 @@ function createDraft({ provider_id, task_id, to_email, subject, body }) {
   if (!subject || !body) throw new Error('subject and body are required');
   let to = to_email;
   if (!to && provider_id) to = getProvider(provider_id)?.email || null;
-  const r = db.prepare('INSERT INTO outbox (provider_id, task_id, to_email, subject, body) VALUES (?,?,?,?,?)')
-    .run(provider_id || null, task_id || null, to || null, subject, body);
+  const r = db.prepare('INSERT INTO outbox (provider_id, task_id, to_email, subject, body, patient_id) VALUES (?,?,?,?,?,?)')
+    .run(provider_id || null, task_id || null, to || null, subject, body, db.currentPatientId());
   return getDraft(r.lastInsertRowid);
 }
 
@@ -289,7 +298,7 @@ router.put('/outbox/:id', wrap((req, res) => {
   if (!d) return res.status(404).json({ error: 'Draft not found' });
   if (d.status === 'sent') return res.status(400).json({ error: 'Already sent' });
   const { to_email, subject, body } = req.body || {};
-  db.prepare("UPDATE outbox SET to_email=?, subject=?, body=?, status='draft', error=NULL WHERE id=?")
+  db.prepare("UPDATE outbox SET to_email=?, subject=?, body=?, status='draft', error=NULL, version=version+1 WHERE id=?")
     .run(to_email ?? d.to_email, subject ?? d.subject, body ?? d.body, d.id);
   res.json(getDraft(d.id));
 }));

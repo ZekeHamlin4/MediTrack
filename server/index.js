@@ -43,7 +43,7 @@ app.post('/api/supplies', (req, res) => {
   const { name, category, description, quantity, unit, barcode, qr_code, low_stock_threshold } = req.body;
   if (!name || !category) return res.status(400).json({error:'name and category required'});
   try {
-    const result = db.prepare('INSERT INTO supplies (name,category,description,quantity,unit,barcode,qr_code,low_stock_threshold) VALUES (?,?,?,?,?,?,?,?)').run(name,category,description||null,quantity||0,unit||'each',barcode||null,qr_code||null,low_stock_threshold||5);
+    const result = db.prepare('INSERT INTO supplies (name,category,description,quantity,unit,barcode,qr_code,low_stock_threshold,patient_id) VALUES (?,?,?,?,?,?,?,?,?)').run(name,category,description||null,quantity||0,unit||'each',barcode||null,qr_code||null,low_stock_threshold||5,db.currentPatientId());
     res.status(201).json(db.prepare('SELECT * FROM supplies WHERE id = ?').get(result.lastInsertRowid));
   } catch(e) { res.status(500).json({error:e.message}); }
 });
@@ -52,7 +52,7 @@ app.put('/api/supplies/:id', (req, res) => {
   try {
     const e = db.prepare('SELECT * FROM supplies WHERE id = ?').get(req.params.id);
     if (!e) return res.status(404).json({error:'Supply not found'});
-    db.prepare('UPDATE supplies SET name=?,category=?,description=?,quantity=?,unit=?,barcode=?,qr_code=?,low_stock_threshold=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name??e.name,category??e.category,description??e.description,quantity??e.quantity,unit??e.unit,barcode??e.barcode,qr_code??e.qr_code,low_stock_threshold??e.low_stock_threshold,req.params.id);
+    db.prepare('UPDATE supplies SET name=?,category=?,description=?,quantity=?,unit=?,barcode=?,qr_code=?,low_stock_threshold=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name??e.name,category??e.category,description??e.description,quantity??e.quantity,unit??e.unit,barcode??e.barcode,qr_code??e.qr_code,low_stock_threshold??e.low_stock_threshold,req.params.id);
     res.json(db.prepare('SELECT * FROM supplies WHERE id = ?').get(req.params.id));
   } catch(e) { res.status(500).json({error:e.message}); }
 });
@@ -71,20 +71,21 @@ app.post('/api/supplies/scan', (req, res) => {
     const supply = db.prepare('SELECT * FROM supplies WHERE id = ?').get(supply_id);
     if (!supply) return res.status(404).json({error:'Supply not found'});
     const qty = parseInt(quantity)||1;
-    if (action==='add') db.prepare('UPDATE supplies SET quantity=quantity+?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(qty,supply_id);
-    else if (action==='remove') db.prepare('UPDATE supplies SET quantity=MAX(0,quantity-?),updated_at=CURRENT_TIMESTAMP WHERE id=?').run(qty,supply_id);
-    db.prepare('INSERT INTO scan_log (supply_id,user_id,action,quantity,notes) VALUES (?,?,?,?,?)').run(supply_id,user_id||null,action,qty,notes||null);
+    if (action==='add') db.prepare('UPDATE supplies SET quantity=quantity+?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(qty,supply_id);
+    else if (action==='remove') db.prepare('UPDATE supplies SET quantity=MAX(0,quantity-?),version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(qty,supply_id);
+    db.prepare('INSERT INTO scan_log (supply_id,user_id,action,quantity,notes,patient_id) VALUES (?,?,?,?,?,?)').run(supply_id,user_id||null,action,qty,notes||null,supply.patient_id);
     res.json({supply:db.prepare('SELECT * FROM supplies WHERE id = ?').get(supply_id),logged:true});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 app.get('/api/users', (req, res) => {
-  try { res.json(db.prepare('SELECT id,name,email,role,created_at FROM users ORDER BY role,name').all()); } catch(e) { res.status(500).json({error:e.message}); }
+  try { res.json(db.prepare('SELECT id,name,email,role,created_at FROM users WHERE active=1 ORDER BY role,name').all()); } catch(e) { res.status(500).json({error:e.message}); }
 });
 app.post('/api/users', (req, res) => {
-  const { name, email, role, pin_hash } = req.body;
+  // PINs are no longer stored here (they were plain text). Sign-in comes in step M2.
+  const { name, email, role } = req.body;
   if (!name || !role) return res.status(400).json({error:'name and role required'});
   try {
-    const result = db.prepare('INSERT INTO users (name,email,role,pin_hash) VALUES (?,?,?,?)').run(name,email||null,role,pin_hash||null);
+    const result = db.prepare('INSERT INTO users (name,email,role,org_id) VALUES (?,?,?,(SELECT MIN(id) FROM organizations))').run(name,email||null,role);
     res.status(201).json(db.prepare('SELECT id,name,email,role,created_at FROM users WHERE id=?').get(result.lastInsertRowid));
   } catch(e) { res.status(500).json({error:e.message}); }
 });
@@ -147,8 +148,26 @@ const server = app.listen(PORT, () => {
   console.log('');
   macos.startLogRotation();
   macos.keepAwake();
+  recordStart();
   openBrowser(url);
 });
+// Uptime and the audit log: record when MediTrack starts and stops (no health data).
+function recordStart() {
+  db.setSetting('server_started_at', new Date().toISOString());
+  db.audit('server_start', { details: { pid: process.pid } });
+}
+let stopping = false;
+function recordStopAndExit(signal) {
+  if (stopping) return;
+  stopping = true;
+  try {
+    db.setSetting('server_stopped_at', new Date().toISOString());
+    db.audit('server_stop', { details: { signal } });
+    db.close();
+  } catch {}
+  process.exit(0);
+}
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => recordStopAndExit(sig));
 server.on('error', e => {
   if (e.code === 'EADDRINUSE') {
     console.log('MediTrack is already running. Opening it in your browser...');
