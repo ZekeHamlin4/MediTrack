@@ -16,18 +16,28 @@ A home app for families caring for a medically complex child. It covers:
 
 ## Running it
 
-Requires Node.js 22 or newer.
+1. **One time:** install Node.js (the **LTS** version) from https://nodejs.org.
+2. Download MediTrack from GitHub (green **Code** button, then **Download ZIP**) and unzip it.
+3. Double-click the launcher:
+   - **Windows:** `Start MediTrack.bat`
+   - **Mac:** `Start MediTrack.command`. The first time, Mac may say it's from an unidentified developer: right-click the file, choose **Open**, then **Open** again.
+
+The first launch takes a minute to set itself up. After that, MediTrack opens in your browser automatically. Keep the black window open while you use it; close it to stop MediTrack.
+
+**On your phone:** the black window shows a "On your phone" address like `http://192.168.1.20:3000`. Open it on a phone on the same Wi-Fi, then use **Add to Home Screen** to get an app icon. It works while the computer is on and MediTrack is running.
+
+<details><summary>Advanced: start from a terminal instead</summary>
 
 ```bash
 cd server
 npm install
-cp .env.example .env   # then fill in the keys you want (see below)
 npm start
 ```
-
-Open http://localhost:3000. On a phone on the same Wi-Fi, use your computer's local IP address, e.g. `http://192.168.1.20:3000`.
+</details>
 
 ## Settings (`server/.env`)
+
+The launcher creates `server/.env` for you. Open it in Notepad (Windows) or TextEdit (Mac), fill in what you want, save, then close and restart MediTrack.
 
 | Feature | What to set |
 |---|---|
