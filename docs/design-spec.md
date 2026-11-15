@@ -1,5 +1,46 @@
 # MediTrack Design Spec
 
+## Phase 1a: build this first (owner decision)
+
+**Build only Phase 1a now.** Everything else in Phase 1 waits until the owner has used 1a for a few weeks and decides what comes next. Step numbers (M…) refer to section 5.
+
+**In Phase 1a:**
+
+| # | What | From section 5 |
+|---|---|---|
+| 1 | **Sign-in and permission checks** | M2, M3 |
+| 2 | **Phone access over Tailscale** (HTTPS, Add to Home Screen) | M10 |
+| 3 | **Documents: scan with the phone camera or upload, tag, and email from the Care Team** ("Send order" / "Send to…" by email) | M11 |
+| 4 | **Provider email alerts:** connect the family mailbox, check every 5 minutes, show only known-provider emails, push "a provider emailed you" (incl. the offline summary) | M12 (email part only) + M18 |
+| 5 | **Nightly encrypted backup** to iCloud Drive, with restore | M16 (backups only) |
+
+**Minimum groundwork these need** (build only the parts that 1a uses):
+- **M0** install, auto-start and stay-awake: alerts and phone access are useless if the Mac sleeps or MediTrack isn't running.
+- **M1** migrations: needed for accounts, sessions, documents and backups, with the existing data upgraded in place and no demo data.
+- **M13, the web app shell only:** a manifest and a service worker, needed for Home Screen install, web push and the offline screen. The esbuild bundle and no-CDN work wait.
+- **Safety basics the spec never cuts** (section 0), limited to what 1a touches: audit-log writes for sign-in, documents, email and backups (M17, no viewer), and same-origin checks (M3).
+
+**Phase 1a simplifications (until M4 Joining is built):**
+- The home admin adds accounts (Settings → Add person: name, title, email, temporary password). Open sign-up stays off.
+- Every active account is a member of the family's patient(s). The "everyone sees everything" trust note is shown when the home admin adds a person.
+- The home admin can deactivate an account and unlock it after lockouts.
+- No patient switcher (M5). If the install has one patient, it is selected automatically.
+
+**Existing screens during 1a:**
+- Care Team, Supplies, Tasks and the other current screens keep working as they do today, behind sign-in. They aren't redesigned yet.
+- **Exception: the current Assistant is hidden in 1a.** It sends patient data to the AI without the consent switches and the $10 limit, which come with M12's assistant part. The owner can ask for it back sooner.
+- The current bugs (section 4b) are fixed only where 1a touches the same code. The rest come with M8.
+
+**Not in 1a:** M4 joining (invites and requests), M5 patient switcher, M6 stock log, M7 live updates, M8 bug fixes, M9 patient wizard, the M12 assistant and fax drafts, M13 bundling, M14 navigation redesign, M15 usage report, M16 settings beyond backups, the M17 audit viewer and export, and M18 events other than provider email.
+
+**Done when:**
+- the owner and a nurse can sign in on their phones over Tailscale
+- a doctor's order can be scanned and emailed to a DME company from its Care Team card
+- a provider email produces a push notification within about 5 minutes
+- a nightly encrypted backup appears in iCloud Drive and restores on a test install
+
+---
+
 ## 0. Goal, principle and constraints (read first)
 
 **Goal (owner's words):**
@@ -47,7 +88,9 @@ Saves show a 5-second **Undo**. Sending email has one confirm.
 
 ---
 
-Status: **revision 9.** New in this revision:
+Status: **revision 10.** New in this revision: **Phase 1a** (top of this spec) is the first build; all seven open decisions are settled with their defaults (section 13).
+
+Revision 9 added:
 - The Family edition is **Mac-first** (the owner's only computer).
 - **Tailscale is approved.**
 - **AI is on**, with a $10/month hard limit.
@@ -101,7 +144,7 @@ Scope: evolve the existing code. Do not rewrite it.
 
 | Phase | Who | Runs on | Cost to the owner | Before it starts |
 |---|---|---|---|---|
-| **1. Family edition** (now) | The owner's family and the people they invite | **The owner's Mac** + Tailscale (free) | **~$0-20/month** (section 9) | Nothing paid. Build M1-M18. |
+| **1. Family edition** (now) | The owner's family and the people they invite | **The owner's Mac** + Tailscale (free) | **~$0-20/month** (section 9) | Nothing paid. Build **Phase 1a** first (top of spec); the rest of M0-M18 after a few weeks of use. |
 | **2. Agency pilot** | One home-nursing agency (e.g. a large agency such as Maxim), some of its nurses and their families | Hosted service (Appendix A), **paid for by the agency or an upfront pilot fee** | $0 from the owner | 2-3 months of real Family edition use, metrics, demo video (section 10). Signed pilot agreement covering hosting, BAAs, lawyer review, insurance, security work. |
 | **3. Public sign-up** | Any family | Hosted | Paid by agency contracts or other funding | Funding in place; everything in Appendix A. |
 | **4. Grow** | More agencies | Hosted; native apps | Contract-funded | Section 11. |
@@ -345,7 +388,7 @@ Build in this order.
 - Document auto-crop; assistant reading document contents.
 - Resupply schedule; expiry/lot numbers; go-bag checklist; one-tap reorder.
 - Task assignment; shift notes; offline editing.
-- Other families running their own free Family edition (Open decision 6).
+- Other families running their own free Family edition, once the setup guide is tested on the owner's Mac (decision 6, section 13).
 - **Not planned:** family billing of any kind.
 
 ---
@@ -552,17 +595,19 @@ Unchanged from revision 8:
 
 ---
 
-## 13. Open decisions
+## 13. Decisions
 
-Plain-language questions for the owner. Answered this round and removed: which computer (a Mac), Tailscale (approved), AI (on, $10/month limit), backups (iCloud Drive, encrypted; USB optional).
+**No open decisions.** In revision 10 the owner accepted the default for all seven remaining questions. Earlier answers are recorded in the sections above.
 
-1. **AI permission split:** *Default: two switches per child, both off until you turn them on: "medical info" (diagnoses, equipment, notes, supply list) and "personal & insurance info" (name, birth date, address, insurance numbers, care team).* Right split?
-2. **Siblings and providers:** if your children share a pharmacy or supply company, enter it once for the family or separately for each child? *Default: separately.*
-3. **Starter supply list:** OK to offer the 35 trach / vent / G-tube items with counts at 0, so you just fill in numbers?
-4. **Call scripts:** *Default: use the child's name, never "he/she".* Keep?
-5. **Resupply schedule** (how many of each item insurance allows per month, next order date): now or later? *Default: later.*
-6. **Other families running their own copy:** other families could install the free Family edition on their own Mac, so you never hold their data. They'd need some tech comfort. *Default: not until the setup guide has been tested on your Mac.* Interested later?
-7. **Agency offboarding (for the pilot):** when a nurse leaves an agency, can the agency end that nurse's agency-linked access (the family is told), or only the family? *Default: the agency can end agency links.*
+| # | Decision | Settled as (default) |
+|---|---|---|
+| 1 | AI permission split | Two switches per child, both **off** until the patient admin turns them on: **"medical info"** (diagnoses, equipment, notes, supply list) and **"personal & insurance info"** (name, birth date, address, insurance numbers, care team). |
+| 2 | Siblings sharing a pharmacy or supply company | Entered **separately for each child**. |
+| 3 | Starter supply list | **Offered:** the 35 trach / vent / G-tube items with counts at 0. Optional at setup, never added automatically. |
+| 4 | Call scripts | Use the **child's name**, never "he/she". |
+| 5 | Resupply schedule | **Later** (section 6). |
+| 6 | Other families running their own copy | **Not until** the setup guide has been tested on the owner's Mac. Revisit later (section 6). |
+| 7 | Agency offboarding (Phase 2 pilot) | **The agency can end agency-linked access** when a nurse leaves; the family is told. Links the family made itself stay under the family's control. |
 
 ---
 
