@@ -83,38 +83,54 @@ function parseProvider(p) {
 const { splitName } = require('./migrations');
 const PATIENT_FIELDS = PROFILE_FIELDS.filter(f => f !== 'child_name');
 
-function getProfile() {
-  const p = db.prepare('SELECT * FROM patients WHERE id = ?').get(db.currentPatientId());
+// Every function below takes the patient id (pid) first and only touches that patient's rows.
+function getProfile(pid) {
+  const p = db.prepare('SELECT * FROM patients WHERE id = ?').get(pid);
   if (!p) return p;
   const child_name = [p.first_name, p.last_name].filter(Boolean).join(' ') || null;
   return { ...p, child_name };
 }
 
-function updateProfile(fields) {
-  const cur = getProfile();
+function updateProfile(pid, fields) {
+  const cur = getProfile(pid);
+  if (!cur) return null;
   const next = {};
   for (const f of PATIENT_FIELDS) next[f] = fields[f] !== undefined ? fields[f] : cur[f];
-  const names = fields.child_name !== undefined ? splitName(fields.child_name) : { first_name: cur.first_name, last_name: cur.last_name };
+  let names = { first_name: cur.first_name, last_name: cur.last_name };
+  if (fields.first_name !== undefined || fields.last_name !== undefined) {
+    names = {
+      first_name: fields.first_name !== undefined ? (String(fields.first_name || '').trim() || null) : cur.first_name,
+      last_name: fields.last_name !== undefined ? (String(fields.last_name || '').trim() || null) : cur.last_name,
+    };
+  } else if (fields.child_name !== undefined) names = splitName(fields.child_name);
   db.prepare(`UPDATE patients SET first_name=?, last_name=?, ${PATIENT_FIELDS.map(f => f + '=?').join(',')}, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(names.first_name, names.last_name, ...PATIENT_FIELDS.map(f => next[f]), cur.id);
-  return getProfile();
+    .run(names.first_name, names.last_name, ...PATIENT_FIELDS.map(f => next[f]), pid);
+  return getProfile(pid);
 }
 
-function listProviders({ search, type } = {}) {
+function listProviders(pid, { search, type } = {}) {
   let sql = 'SELECT * FROM providers';
-  const cond = [], params = [];
+  const cond = ['patient_id = ?'], params = [pid];
   if (type) { cond.push('type = ?'); params.push(type); }
   if (search) {
     cond.push('(name LIKE ? OR specialty LIKE ? OR contact_person LIKE ? OR notes LIKE ? OR departments LIKE ?)');
     const t = '%' + search + '%'; params.push(t, t, t, t, t);
   }
-  if (cond.length) sql += ' WHERE ' + cond.join(' AND ');
+  sql += ' WHERE ' + cond.join(' AND ');
   sql += ' ORDER BY favorite DESC, type, name';
   return db.prepare(sql).all(...params).map(parseProvider);
 }
 
-function getProvider(id) {
-  return parseProvider(db.prepare('SELECT * FROM providers WHERE id = ?').get(id));
+function getProvider(pid, id) {
+  return parseProvider(db.prepare('SELECT * FROM providers WHERE id = ? AND patient_id = ?').get(id, pid));
+}
+
+// A link to another record (provider, task) must point to this patient's record; otherwise 400.
+function checkLink(pid, table, id) {
+  if (!id) return null;
+  const row = db.prepare(`SELECT id FROM ${table} WHERE id = ? AND patient_id = ?`).get(id, pid);
+  if (!row) { const e = new Error('Linked ' + (table === 'providers' ? 'provider' : 'task') + ' not found'); e.status = 400; throw e; }
+  return row.id;
 }
 
 function normalizeDepartments(d) {
@@ -124,26 +140,26 @@ function normalizeDepartments(d) {
   })));
 }
 
-function createProvider(data) {
-  if (!data.name) throw new Error('name is required');
+function createProvider(pid, data) {
+  if (!data.name) { const e = new Error('name is required'); e.status = 400; throw e; }
   const type = PROVIDER_TYPES.includes(data.type) ? data.type : 'other';
   const vals = PROVIDER_FIELDS.map(f => f === 'type' ? type : f === 'favorite' ? (data.favorite ? 1 : 0) : f === 'source' ? (data.source || 'manual') : (data[f] ?? null));
   const r = db.prepare(`INSERT INTO providers (${PROVIDER_FIELDS.join(',')},departments,patient_id) VALUES (${PROVIDER_FIELDS.map(() => '?').join(',')},?,?)`)
-    .run(...vals, normalizeDepartments(data.departments), db.currentPatientId());
-  return getProvider(r.lastInsertRowid);
+    .run(...vals, normalizeDepartments(data.departments), pid);
+  return getProvider(pid, r.lastInsertRowid);
 }
 
-function updateProvider(id, data) {
-  const cur = db.prepare('SELECT * FROM providers WHERE id = ?').get(id);
+function updateProvider(pid, id, data) {
+  const cur = db.prepare('SELECT * FROM providers WHERE id = ? AND patient_id = ?').get(id, pid);
   if (!cur) return null;
   const next = { ...cur };
   for (const f of PROVIDER_FIELDS) if (data[f] !== undefined) next[f] = data[f];
   if (!PROVIDER_TYPES.includes(next.type)) next.type = 'other';
   next.favorite = next.favorite ? 1 : 0;
   const departments = data.departments !== undefined ? normalizeDepartments(data.departments) : cur.departments;
-  db.prepare(`UPDATE providers SET ${PROVIDER_FIELDS.map(f => f + '=?').join(',')}, departments=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(...PROVIDER_FIELDS.map(f => next[f]), departments, id);
-  return getProvider(id);
+  db.prepare(`UPDATE providers SET ${PROVIDER_FIELDS.map(f => f + '=?').join(',')}, departments=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND patient_id=?`)
+    .run(...PROVIDER_FIELDS.map(f => next[f]), departments, id, pid);
+  return getProvider(pid, id);
 }
 
 function parseTask(t) {
@@ -158,51 +174,53 @@ function normalizeSteps(steps) {
   return JSON.stringify(steps.map(s => typeof s === 'string' ? { text: s, done: false } : { text: String(s.text || ''), done: !!s.done }).filter(s => s.text));
 }
 
-function listTasks({ status, provider_id } = {}) {
-  let sql = 'SELECT t.*, p.name AS provider_name FROM tasks t LEFT JOIN providers p ON t.provider_id = p.id';
-  const cond = [], params = [];
+function listTasks(pid, { status, provider_id } = {}) {
+  let sql = 'SELECT t.*, p.name AS provider_name FROM tasks t LEFT JOIN providers p ON t.provider_id = p.id AND p.patient_id = t.patient_id';
+  const cond = ['t.patient_id = ?'], params = [pid];
   if (status === 'active') cond.push("t.status != 'done'");
   else if (status) { cond.push('t.status = ?'); params.push(status); }
   if (provider_id) { cond.push('t.provider_id = ?'); params.push(provider_id); }
-  if (cond.length) sql += ' WHERE ' + cond.join(' AND ');
+  sql += ' WHERE ' + cond.join(' AND ');
   sql += " ORDER BY CASE t.status WHEN 'done' THEN 1 ELSE 0 END, COALESCE(t.due_date, '9999'), t.created_at DESC";
   return db.prepare(sql).all(...params).map(parseTask);
 }
 
-function getTask(id) {
-  return parseTask(db.prepare('SELECT t.*, p.name AS provider_name FROM tasks t LEFT JOIN providers p ON t.provider_id = p.id WHERE t.id = ?').get(id));
+function getTask(pid, id) {
+  return parseTask(db.prepare('SELECT t.*, p.name AS provider_name FROM tasks t LEFT JOIN providers p ON t.provider_id = p.id AND p.patient_id = t.patient_id WHERE t.id = ? AND t.patient_id = ?').get(id, pid));
 }
 
-function createTask({ title, description, provider_id, due_date, steps, status }) {
-  if (!title) throw new Error('title is required');
+function createTask(pid, { title, description, provider_id, due_date, steps, status }) {
+  if (!title) { const e = new Error('title is required'); e.status = 400; throw e; }
   const r = db.prepare('INSERT INTO tasks (title, description, provider_id, due_date, steps, status, patient_id) VALUES (?,?,?,?,?,?,?)')
-    .run(title, description || null, provider_id || null, due_date || null, normalizeSteps(steps), ['open', 'in_progress', 'waiting', 'done'].includes(status) ? status : 'open', db.currentPatientId());
-  return getTask(r.lastInsertRowid);
+    .run(title, description || null, checkLink(pid, 'providers', provider_id), due_date || null, normalizeSteps(steps), ['open', 'in_progress', 'waiting', 'done'].includes(status) ? status : 'open', pid);
+  return getTask(pid, r.lastInsertRowid);
 }
 
-function updateTask(id, data) {
-  const cur = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+function updateTask(pid, id, data) {
+  const cur = db.prepare('SELECT * FROM tasks WHERE id = ? AND patient_id = ?').get(id, pid);
   if (!cur) return null;
   const status = ['open', 'in_progress', 'waiting', 'done'].includes(data.status) ? data.status : cur.status;
-  db.prepare('UPDATE tasks SET title=?, description=?, provider_id=?, due_date=?, status=?, steps=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(
+  db.prepare('UPDATE tasks SET title=?, description=?, provider_id=?, due_date=?, status=?, steps=?, version=version+1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND patient_id=?').run(
     data.title ?? cur.title, data.description ?? cur.description,
-    data.provider_id !== undefined ? (data.provider_id || null) : cur.provider_id,
+    data.provider_id !== undefined ? checkLink(pid, 'providers', data.provider_id) : cur.provider_id,
     data.due_date ?? cur.due_date, status,
-    data.steps !== undefined ? normalizeSteps(data.steps) : cur.steps, id);
-  return getTask(id);
+    data.steps !== undefined ? normalizeSteps(data.steps) : cur.steps, id, pid);
+  return getTask(pid, id);
 }
 
-function getDraft(id) {
-  return db.prepare('SELECT o.*, p.name AS provider_name FROM outbox o LEFT JOIN providers p ON o.provider_id = p.id WHERE o.id = ?').get(id);
+function getDraft(pid, id) {
+  return db.prepare('SELECT o.*, p.name AS provider_name FROM outbox o LEFT JOIN providers p ON o.provider_id = p.id AND p.patient_id = o.patient_id WHERE o.id = ? AND o.patient_id = ?').get(id, pid);
 }
 
-function createDraft({ provider_id, task_id, to_email, subject, body }) {
-  if (!subject || !body) throw new Error('subject and body are required');
+function createDraft(pid, { provider_id, task_id, to_email, subject, body }) {
+  if (!subject || !body) { const e = new Error('subject and body are required'); e.status = 400; throw e; }
+  const prov = checkLink(pid, 'providers', provider_id);
+  const task = checkLink(pid, 'tasks', task_id);
   let to = to_email;
-  if (!to && provider_id) to = getProvider(provider_id)?.email || null;
+  if (!to && prov) to = getProvider(pid, prov)?.email || null;
   const r = db.prepare('INSERT INTO outbox (provider_id, task_id, to_email, subject, body, patient_id) VALUES (?,?,?,?,?,?)')
-    .run(provider_id || null, task_id || null, to || null, subject, body, db.currentPatientId());
-  return getDraft(r.lastInsertRowid);
+    .run(prov, task, to || null, subject, body, pid);
+  return getDraft(pid, r.lastInsertRowid);
 }
 
 // Searches the free public CMS NPPES NPI Registry. Returns phone and fax (no email: the registry doesn't publish it).
@@ -237,78 +255,81 @@ async function lookupNpi({ city, state, postal_code, type, name, limit = 20 }) {
   });
 }
 
-const router = express.Router();
 const wrap = fn => async (req, res) => {
-  try { await fn(req, res); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  try { await fn(req, res); } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Something went wrong' }); }
 };
 
-router.get('/profile', wrap((req, res) => res.json(getProfile())));
-router.put('/profile', wrap((req, res) => res.json(updateProfile(req.body || {}))));
-
-router.get('/providers', wrap((req, res) => res.json(listProviders(req.query))));
-router.get('/providers/types', wrap((req, res) => res.json(PROVIDER_TYPES)));
-router.get('/providers/:id', wrap((req, res) => {
-  const p = getProvider(req.params.id);
-  if (!p) return res.status(404).json({ error: 'Provider not found' });
-  res.json(p);
-}));
-router.post('/providers', wrap((req, res) => res.status(201).json(createProvider(req.body || {}))));
-router.post('/providers/bulk', wrap((req, res) => {
-  const items = Array.isArray(req.body) ? req.body : [];
-  const saved = db.transaction(list => list.map(createProvider))(items);
-  res.status(201).json(saved);
-}));
-router.put('/providers/:id', wrap((req, res) => {
-  const p = updateProvider(req.params.id, req.body || {});
-  if (!p) return res.status(404).json({ error: 'Provider not found' });
-  res.json(p);
-}));
-router.delete('/providers/:id', wrap((req, res) => {
-  const r = db.prepare('DELETE FROM providers WHERE id = ?').run(req.params.id);
-  if (!r.changes) return res.status(404).json({ error: 'Provider not found' });
-  res.json({ success: true });
-}));
-
+// Routes that don't touch patient data (signed-in users only; see index.js).
+const router = express.Router();
 router.get('/call-tips', wrap((req, res) => res.json(CALL_TIPS)));
-
 router.get('/lookup', wrap(async (req, res) => {
   try { res.json(await lookupNpi(req.query)); }
   catch (e) { res.status(502).json({ error: 'Provider lookup failed: ' + e.message }); }
 }));
 
-router.get('/tasks', wrap((req, res) => res.json(listTasks(req.query))));
-router.post('/tasks', wrap((req, res) => res.status(201).json(createTask(req.body || {}))));
-router.put('/tasks/:id', wrap((req, res) => {
-  const t = updateTask(req.params.id, req.body || {});
+// Patient data: mounted at /api/patients/:pid after the membership check, which sets req.patientId.
+const patientRouter = express.Router();
+patientRouter.get('/profile', wrap((req, res) => res.json(getProfile(req.patientId))));
+patientRouter.put('/profile', wrap((req, res) => res.json(updateProfile(req.patientId, req.body || {}))));
+
+patientRouter.get('/providers', wrap((req, res) => res.json(listProviders(req.patientId, req.query))));
+patientRouter.get('/providers/types', wrap((req, res) => res.json(PROVIDER_TYPES)));
+patientRouter.get('/providers/:id', wrap((req, res) => {
+  const p = getProvider(req.patientId, req.params.id);
+  if (!p) return res.status(404).json({ error: 'Provider not found' });
+  res.json(p);
+}));
+patientRouter.post('/providers', wrap((req, res) => res.status(201).json(createProvider(req.patientId, req.body || {}))));
+patientRouter.post('/providers/bulk', wrap((req, res) => {
+  const items = Array.isArray(req.body) ? req.body : [];
+  const saved = db.transaction(list => list.map(x => createProvider(req.patientId, x)))(items);
+  res.status(201).json(saved);
+}));
+patientRouter.put('/providers/:id', wrap((req, res) => {
+  const p = updateProvider(req.patientId, req.params.id, req.body || {});
+  if (!p) return res.status(404).json({ error: 'Provider not found' });
+  res.json(p);
+}));
+patientRouter.delete('/providers/:id', wrap((req, res) => {
+  const r = db.prepare('DELETE FROM providers WHERE id = ? AND patient_id = ?').run(req.params.id, req.patientId);
+  if (!r.changes) return res.status(404).json({ error: 'Provider not found' });
+  res.json({ success: true });
+}));
+
+patientRouter.get('/tasks', wrap((req, res) => res.json(listTasks(req.patientId, req.query))));
+patientRouter.post('/tasks', wrap((req, res) => res.status(201).json(createTask(req.patientId, req.body || {}))));
+patientRouter.put('/tasks/:id', wrap((req, res) => {
+  const t = updateTask(req.patientId, req.params.id, req.body || {});
   if (!t) return res.status(404).json({ error: 'Task not found' });
   res.json(t);
 }));
-router.delete('/tasks/:id', wrap((req, res) => {
-  const r = db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+patientRouter.delete('/tasks/:id', wrap((req, res) => {
+  const r = db.prepare('DELETE FROM tasks WHERE id = ? AND patient_id = ?').run(req.params.id, req.patientId);
   if (!r.changes) return res.status(404).json({ error: 'Task not found' });
   res.json({ success: true });
 }));
 
-router.get('/outbox', wrap((req, res) => {
-  res.json(db.prepare('SELECT o.*, p.name AS provider_name FROM outbox o LEFT JOIN providers p ON o.provider_id = p.id ORDER BY o.created_at DESC LIMIT 100').all());
+patientRouter.get('/outbox', wrap((req, res) => {
+  res.json(db.prepare('SELECT o.*, p.name AS provider_name FROM outbox o LEFT JOIN providers p ON o.provider_id = p.id AND p.patient_id = o.patient_id WHERE o.patient_id = ? ORDER BY o.created_at DESC LIMIT 100').all(req.patientId));
 }));
-router.post('/outbox', wrap((req, res) => res.status(201).json(createDraft(req.body || {}))));
-router.put('/outbox/:id', wrap((req, res) => {
-  const d = getDraft(req.params.id);
+patientRouter.post('/outbox', wrap((req, res) => res.status(201).json(createDraft(req.patientId, req.body || {}))));
+patientRouter.put('/outbox/:id', wrap((req, res) => {
+  const d = getDraft(req.patientId, req.params.id);
   if (!d) return res.status(404).json({ error: 'Draft not found' });
   if (d.status === 'sent') return res.status(400).json({ error: 'Already sent' });
   const { to_email, subject, body } = req.body || {};
-  db.prepare("UPDATE outbox SET to_email=?, subject=?, body=?, status='draft', error=NULL, version=version+1 WHERE id=?")
-    .run(to_email ?? d.to_email, subject ?? d.subject, body ?? d.body, d.id);
-  res.json(getDraft(d.id));
+  db.prepare("UPDATE outbox SET to_email=?, subject=?, body=?, status='draft', error=NULL, version=version+1 WHERE id=? AND patient_id=?")
+    .run(to_email ?? d.to_email, subject ?? d.subject, body ?? d.body, d.id, req.patientId);
+  res.json(getDraft(req.patientId, d.id));
 }));
-router.delete('/outbox/:id', wrap((req, res) => {
-  db.prepare("DELETE FROM outbox WHERE id = ? AND status != 'sent'").run(req.params.id);
+patientRouter.delete('/outbox/:id', wrap((req, res) => {
+  const r = db.prepare("DELETE FROM outbox WHERE id = ? AND patient_id = ? AND status != 'sent'").run(req.params.id, req.patientId);
+  if (!r.changes) return res.status(404).json({ error: 'Draft not found' });
   res.json({ success: true });
 }));
 
 module.exports = {
-  router, CALL_TIPS, PROVIDER_TYPES,
+  router, patientRouter, CALL_TIPS, PROVIDER_TYPES,
   getProfile, updateProfile, listProviders, getProvider, createProvider, updateProvider,
   listTasks, getTask, createTask, updateTask, createDraft, getDraft, lookupNpi,
 };

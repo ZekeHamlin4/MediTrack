@@ -92,7 +92,7 @@ test('upgrade from the pre-M1 database keeps every record', () => {
   assert.equal(db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action='database_upgraded'").get().c, 1);
 
   // A full copy of the old database was saved first, and it matches the old data.
-  const copies = fs.readdirSync(dir).filter(f => f.startsWith('meditrack-before-v1'));
+  const copies = fs.readdirSync(dir).filter(f => f.startsWith('meditrack-before-v' + LATEST_VERSION));
   assert.equal(copies.length, 1);
   const old = new Database(path.join(dir, copies[0]), { readonly: true });
   assert.equal(old.pragma('user_version', { simple: true }), 0);

@@ -53,4 +53,12 @@ function startLogRotation(opts) {
   return timer;
 }
 
-module.exports = { keepAwake, rotateLogs, startLogRotation, MAX_LOG_BYTES };
+// Shows a macOS notification (used for the first-run setup code). Does nothing on other systems.
+function notify(text, { platform = process.platform, execFileFn = require('child_process').execFile } = {}) {
+  if (platform !== 'darwin') return false;
+  const safe = String(text).replace(/["\\]/g, '');
+  execFileFn('/usr/bin/osascript', ['-e', `display notification "${safe}" with title "MediTrack"`], () => {});
+  return true;
+}
+
+module.exports = { keepAwake, rotateLogs, startLogRotation, notify, MAX_LOG_BYTES };

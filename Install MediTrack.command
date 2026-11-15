@@ -139,6 +139,10 @@ fi
 open "$URL"
 
 LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
+SETUP_CODE=""
+if curl -s --max-time 3 "$URL/api/setup/status" | grep -q '"needs_setup":true'; then
+  SETUP_CODE="$(grep -o 'setup code: [0-9-]*' "$LOG_DIR/meditrack.log" 2>/dev/null | tail -1 | awk '{print $3}')"
+fi
 
 cat <<'EOT'
 
@@ -160,6 +164,14 @@ if [ -n "$LAN_IP" ]; then
 fi
 cat <<'EOT'
 
+EOT
+if [ -n "$SETUP_CODE" ]; then
+  echo "  FIRST-TIME SETUP: the browser asks for a setup code. Your code is:  $SETUP_CODE"
+  echo "  (It also appeared as a notification. A new code is made each time MediTrack restarts,"
+  echo "   until setup is done. The latest one is in $LOG_DIR/meditrack.log)"
+  echo ""
+fi
+cat <<'EOT'
   To remove the background service, double-click "Uninstall MediTrack.command".
   Your data is never deleted.
 

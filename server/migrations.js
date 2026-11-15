@@ -207,6 +207,14 @@ const MIGRATIONS = [
         .run(JSON.stringify({ from: 0, to: 1, old_accounts_deactivated: oldUsers }));
     },
   },
+  {
+    version: 2,
+    name: 'sign-in: temporary passwords',
+    up(db) {
+      // Set when the home admin gives someone a temporary password; they choose their own at next sign-in.
+      db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

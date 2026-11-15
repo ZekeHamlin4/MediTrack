@@ -12,11 +12,80 @@ web app shell and **M17** audit-log writes where each step needs them).
 |---|---|
 | M0 Mac install, auto-start, stay awake | **Done** (needs checking on Zeke's Mac) |
 | M1 Data foundation and migration | **Done** |
-| M2 + M3 Sign-in and permission checks | Next |
-| M10 Phone access over Tailscale | Not started |
+| M2 + M3 Sign-in and permission checks | **Done** (needs checking on Zeke's Mac and phone) |
+| M10 Phone access over Tailscale | Next |
 | M11 Documents | Not started |
 | M12 (email) + M18 Provider email alerts | Not started |
 | M16 Nightly encrypted backup | Not started |
+
+---
+
+## M2 + M3. Sign-in and permission checks (done)
+
+### What changed
+**Sign-in (M2), Phase 1a version**
+- **First run:** when there's no home admin yet, MediTrack makes an 8-digit **setup code** each time it starts. It shows the code in the log/Start window, as a Mac notification, and at the end of `Install MediTrack.command`. The setup screen asks for the code, then name, title, email, password (10+ characters) and "I am 18 or older". After 5 wrong codes a new code is made.
+  - That account becomes the **home admin** and the **patient admin** of the child.
+  - Next comes the "Keep this Mac awake" checklist. Then, on an upgraded install, "Check your child's details" (first name, last name, birth date) confirms the name split from M1. A new install goes on to the existing setup wizard.
+- **Sign in** with email + password. A wrong email and a wrong password get the same answer.
+- **Lockout:** 5 wrong passwords lock the account for 15 minutes. The home admin can unlock it sooner.
+- **Settings → People** (home admin only): add a person (name, title, email, temporary password) with the trust note in orange, unlock, set a temporary password, turn off / turn back on. A person who has a temporary password must choose their own before anything else works. Every active account is a member of the child (Phase 1a rule).
+- **My account:** signed-in devices (sign out any of them), change password (signs out your other devices), sign out.
+- **Security:** passwords hashed with scrypt (random salt). Session tokens are random, and only their SHA-256 hash is stored. The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` over HTTPS (the Tailscale address). Sessions end after **30 days without use** (the spec doesn't set a length, so this is my default). Database upgrade v2 adds `must_change_password`.
+- Old pre-M1 users: if Zeke adds someone with the same email as an old (switched-off) user, that old record is reused, so their past scan history stays linked.
+
+**Permission checks (M3)**
+- **Every API call** needs a signed-in account, except setup status, setup (needs the code), sign-in and sign-out. Not signed in → **401**. Not allowed (Settings for non-admins, or before choosing own password) → **403**. Missing, or another patient's data → **404**.
+- Patient data moved to **`/api/patients/<id>/…`** with a membership check. Every query only touches that patient's rows, and links (a task's provider, a draft's task) must point to the same patient.
+- **`cors()` removed** (and the `cors` package). **Same-origin check:** any request that changes something must come from MediTrack's own page (Origin or Referer must match the address used). The Tailscale address passed on by `tailscale serve` is accepted.
+- "Logged by" on scans is now always the signed-in person (fixes the impersonation gap). The "Logged by" picker and the old Users screen (plain-text PINs) are gone.
+- **Assistant hidden** (Phase 1a rule): the tab, the "Ask assistant" buttons and its server routes are off. `server/assistant.js` is kept, not connected.
+- **Audit log** lines: setup, sign-in (ok / failed / blocked while locked), lockout, unlock, sign-out, device signed out, password changed, temporary password, account added / off / on, email sent. Never passwords or health details.
+- Small fixes in code this step touched: deleting a draft or record that doesn't exist now says "not found" (it used to say "deleted"); server errors no longer show internal messages.
+
+**Files:** new `server/auth.js`, `server/app.js` (the API with all checks in one place), `server/supplies.js` (supply routes moved out of `index.js`), `client/account.jsx`; changed `server/index.js`, `care.js`, `email.js`, `macos.js`, `migrations.js`, `package.json`/`package-lock.json`, `client/index.html`, `client/care.jsx`, `Install MediTrack.command`, `README.md`; new tests `server/test/auth.test.js`.
+
+### How Zeke can try it (on the Mac)
+1. Optional: copy `server/meditrack.db` somewhere safe.
+2. Get the new version. Double-click `Install MediTrack.command` again (or use `Start MediTrack.command`).
+3. At the end of the Install window, note the **setup code** (also in a Mac notification, and in `~/Library/Logs/MediTrack/meditrack.log`). With the Start window, it's printed there.
+4. MediTrack opens in the browser and asks for the code. Enter it and create **your** account (use a password you'll remember; 10+ characters).
+5. Read the keep-awake checklist → **Done**. Then check your child's first/last name and birth date → **Looks right**.
+6. Check Care Team, Tasks, Supplies: everything should be as before.
+7. **Settings → People → + Add person**: add yourself a test "Nurse" with a test email and a temporary password.
+8. **Sign out** (top right). Sign in as the test nurse: it asks to choose a new password, then shows the app without the Settings tab.
+9. Try a wrong password 5 times: the 6th try says the account is locked. Sign in as yourself, Settings → People → **Unlock**.
+10. On a phone on the same Wi-Fi (http://<Mac's address>:3000) you can sign in too. (Phone access from anywhere over HTTPS is the next step.)
+
+### What Zeke must do
+- Nothing to install. Keep the setup code private until setup is done (anyone who can open MediTrack and has the code could create the home admin).
+- If he forgets his own password before adding anyone else: there's no reset by email yet. Recovery is in "Known gaps" below.
+
+### How it was tested
+- **`npm test`: 16 of 16 pass**: 10 new sign-in/permission tests plus the 6 database tests.
+  - Every route in every router (found automatically) answers 401 without sign-in. The old `/api/users` and the assistant answer 404.
+  - Same-origin: no Origin → 403, another website → 403 (even with a valid cookie), same-site Referer → OK, Tailscale forwarded host → OK.
+  - Cookie flags (HttpOnly, SameSite=Lax, Secure over HTTPS), and only hashes are stored.
+  - Setup: wrong code, 5 wrong codes make a new one, short password, 18+, runs only once.
+  - Temporary password → 403 until changed. Nurse can't use Settings. Scans are logged as the signed-in person.
+  - Another patient's data → 404 by list, by id, edit and delete. Linking to it → 400.
+  - Lockout after 5, refused while locked even with the right password, works again after 15 minutes, admin unlock; unknown email and wrong password look the same.
+  - Sessions: expiry, 30 days and refreshed on use, sign-out, sign out another device, turned-off account. The admin can't turn themselves off. Temporary password reset.
+  - Audit lines are present and contain no passwords.
+- **Do the tests catch mistakes?** I removed the sign-in check: the "every route" test failed. I removed the same-origin check: its test failed. Both were put back.
+- **Headless Chrome, phone-size screen, on an upgraded pre-M1 database:** wrong setup code message → account → checklist → child details (showed "Testkid" / "Mary Example", fixed to "Testkid Mary" / "Example") → all tabs load with the old data. Settings shows the trust note; added the nurse; My account device list; sign out. The nurse's wrong password gets the message, then the "choose your password" screen, then the app without Settings. No page errors.
+- **Fresh install in Chrome:** setup → checklist → the existing setup wizard → Care Team.
+- **Installer (with stand-ins for Mac commands):** prints the setup code at the end, matching the log.
+- **Not tested on a real Mac or phone:** the notification, Safari on iPhone, cookies over the Tailscale HTTPS address.
+
+### Known gaps
+- **Quick PIN per device** (spec M2, optional) is **not built**. The Phase 1a "done when" list doesn't need it. Say if you want it.
+- **Forgot password by email** needs the connected mailbox (M12). For now the home admin sets a temporary password.
+- **If the home admin forgets their own password** and there's no one else: there is no in-app way back yet. Restoring the copy made before the upgrade loses the account setup but not the data. A proper Mac-side "reset home admin" tool can be added; tell me if you want it now.
+- The same-origin check trusts the address the browser used, plus the Tailscale forwarded address. **Check it on the phone in M10.**
+- Lists aren't filtered by "patient chosen" on screen (no patient switcher in 1a; one patient is chosen automatically).
+- `server/assistant.js` still uses the old (pre-M3) data calls. It must be updated when the assistant comes back in M12.
+- Times shown in the old screens may still be off by the time-zone difference (spec bug 4b.4, for M8).
 
 ---
 
