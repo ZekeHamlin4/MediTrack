@@ -6,34 +6,18 @@
 // - Same-origin check: requests that change data must come from MediTrack's own pages.
 // - Errors: 401 = not signed in, 403 = not allowed, 404 = not found (also used for other patients' data).
 const crypto = require('crypto');
-const { promisify } = require('util');
 const express = require('express');
 const db = require('./db');
 
-const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'mt_session';
 const SESSION_DAYS = 30;            // a session ends after 30 days without use
 const TOUCH_EVERY_MS = 5 * 60 * 1000;
 const MAX_FAILS = 5;
 const LOCK_MINUTES = 15;
-const MIN_PASSWORD = 10;
 const SETUP_MAX_FAILS = 5;
 
-// ---------- passwords ----------
-const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
-async function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const key = await scrypt(String(password), salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
-  return ['scrypt', SCRYPT.N, SCRYPT.r, SCRYPT.p, salt.toString('base64'), key.toString('base64')].join('$');
-}
-async function verifyPassword(password, stored) {
-  const parts = String(stored || '').split('$');
-  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
-  const [, N, r, p, salt, hash] = parts;
-  const expected = Buffer.from(hash, 'base64');
-  const key = await scrypt(String(password), Buffer.from(salt, 'base64'), expected.length, { N: +N, r: +r, p: +p });
-  return crypto.timingSafeEqual(key, expected);
-}
+// ---------- passwords (see passwords.js; shared with the Mac reset tool) ----------
+const { hashPassword, verifyPassword, passwordProblem, MIN_PASSWORD } = require('./passwords');
 // Used when the email is unknown, so a wrong email takes as long as a wrong password.
 let dummyHash = null;
 async function burnTime(password) {
@@ -41,11 +25,6 @@ async function burnTime(password) {
   await verifyPassword(password, dummyHash);
 }
 
-function passwordProblem(pw) {
-  if (typeof pw !== 'string' || pw.length < MIN_PASSWORD) return `Password must be at least ${MIN_PASSWORD} characters.`;
-  if (pw.length > 200) return 'Password is too long.';
-  return null;
-}
 const normEmail = e => String(e || '').trim().toLowerCase();
 const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 

@@ -16,7 +16,7 @@ web app shell and **M17** audit-log writes where each step needs them).
 | Fix 1: nothing typed twice at first run | **Done** |
 | Fix 2: provider search by ZIP, nearest first | **Done** (needs a real-registry check on Zeke's Mac) |
 | Fix 3: search shown every time a provider is added | **Done** |
-| Reset home admin password (Mac tool) | Not started (after the 3 fixes) |
+| Reset home admin password (Mac tool) | **Done** (needs checking on Zeke's Mac) |
 | M10 Phone access over Tailscale | After the fixes |
 | M11 Documents | Not started |
 | M12 (email) + M18 Provider email alerts | Not started |
@@ -32,6 +32,79 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Reset the home admin password on the Mac (done)
+
+Zeke approved this tool on Nov 16, for when the home admin forgets their password and nobody else can set a temporary one.
+
+### What it does
+- **New `Reset Admin Password.command`** (repo root, double-click, same style as the other `.command` files).
+  - It refuses to run if it isn't on a Mac, or if it's started over a remote connection (SSH). It must be run on the Mac itself.
+  - It refuses if MediTrack isn't installed yet.
+- **Steps:** it shows the home admin account (if there are several, Zeke picks one by number) and asks to type `y` to confirm. Then it asks for the new password **twice**.
+  - Typing is hidden: nothing shows on screen.
+  - The same rule as the app applies: 10+ characters.
+  - The password is hashed with scrypt, using the same code as the app (moved into `server/passwords.js`).
+- **What it changes, and nothing else** (in one transaction):
+  - that account's password
+  - "must change password" turned off
+  - its lockout cleared
+  - all of that account's sessions ended, so it is signed out everywhere
+  - one audit-log line `admin_password_reset_on_mac` with how many devices were signed out (never the password)
+- **When it stops without changing anything:** answering "no", the two passwords not matching, a password that's too short, a wrong number, no home admin yet, no MediTrack data found, or a database version that doesn't match. It **never upgrades the database**: if the version is older, it asks to start MediTrack once first.
+
+### Why it doesn't stop MediTrack
+I chose to **leave MediTrack running** rather than stopping and restarting the background service:
+- The database is in WAL mode, which lets a second program write safely while the server runs.
+- The tool waits up to 10 seconds if the server is in the middle of a write, then makes all its changes in one transaction. They are either all saved or none are.
+- The server checks passwords and sessions in the database on every request, so the new password and the sign-outs take effect at once. No restart is needed.
+- Stopping and restarting the background service would add more steps and more ways to go wrong (`launchctl`, a Start window that's open), for no gain.
+
+### Files
+New:
+- `Reset Admin Password.command`
+- `server/reset-admin.js`
+- `server/passwords.js` (password code shared with `auth.js`)
+- `server/test/reset-admin.test.js`
+
+Changed:
+- `server/auth.js` (uses `passwords.js`; no behaviour change)
+- `README.md` ("Forgot the home admin password?")
+- `docs/build-notes.md`
+
+### How Zeke can test it (on the Mac)
+This changes your real MediTrack password, so pick a new one you'll remember.
+1. Optional: sign in to MediTrack on your phone first, so you can see it get signed out.
+2. In the MediTrack folder, double-click **`Reset Admin Password.command`**. The first time, macOS may block it: right-click → **Open** → **Open**.
+3. It shows "Reset the password for [your name], [your email]?". Type `y` and press Return.
+4. Type a new password (10+ characters) and press Return. **Nothing shows while you type**; that's normal. Type it again and press Return.
+5. It says "Done… signed out on N devices." Press any key to close the window.
+6. In the browser, MediTrack now asks you to sign in. The old password no longer works; the new one does.
+7. On your phone, MediTrack asks you to sign in again. Other people (for example a nurse) stay signed in.
+8. Optional: type a wrong password 5 times so your account locks, then run the tool again. It unlocks the account.
+
+### How it was tested
+- `npm test`: **32 of 32 pass** (4 new tests):
+  - **One admin:** confirm, then type the password twice. The new password works, the hash is scrypt, the password is never printed, and the nurse's account is unchanged.
+  - **Two admins:** pick #2, and only #2 changes. A number not on the list does nothing.
+  - **Nothing changes when:**
+    - the answer is "n"
+    - the two passwords differ
+    - the password is too short
+    - the database version is older (and the tool doesn't upgrade it)
+    - there is no home admin
+    - there is no database file (and none is created)
+  - **With MediTrack running** (the real app, on the same database file):
+    - the admin was locked out and the reset unlocked it
+    - the admin's old session got 401, while the nurse stayed signed in
+    - the old password failed and the new one worked
+    - every other table and session was unchanged
+    - one audit line was written, with no password in the audit log
+- **Do the tests catch mistakes?** I removed the "sign out everywhere" step from the tool: the running-MediTrack test failed. It was put back.
+- **In a pseudo-terminal (like Terminal.app):** the questions showed, the password was **not** shown while typing, the tool exited cleanly, and the new password was stored.
+- **Not tested on a real Mac:** the double-click itself, the Gatekeeper prompt, and the Mac's Terminal.
 
 ---
 
@@ -237,7 +310,7 @@ His real MediTrack is already set up, so try it on a throw-away test copy:
 
 ### What Zeke must do
 - Nothing to install. Keep the setup code private until setup is done (anyone who can open MediTrack and has the code could create the home admin).
-- If he forgets his own password before adding anyone else: there's no reset by email yet. Recovery is in "Known gaps" below.
+- If he forgets his own password: double-click `Reset Admin Password.command` on the Mac (added later; see above).
 
 ### How it was tested
 - **`npm test`: 16 of 16 pass**: 10 new sign-in/permission tests plus the 6 database tests.
@@ -259,7 +332,7 @@ His real MediTrack is already set up, so try it on a throw-away test copy:
 ### Known gaps
 - **Quick PIN per device** (spec M2, optional) is **not built**. The Phase 1a "done when" list doesn't need it. Say if you want it.
 - **Forgot password by email** needs the connected mailbox (M12). For now the home admin sets a temporary password.
-- **If the home admin forgets their own password** and there's no one else: there is no in-app way back yet. Restoring the copy made before the upgrade loses the account setup but not the data. A proper Mac-side "reset home admin" tool can be added; tell me if you want it now.
+- **If the home admin forgets their own password:** solved by `Reset Admin Password.command` (see the section above).
 - The same-origin check trusts the address the browser used, plus the Tailscale forwarded address. **Check it on the phone in M10.**
 - Lists aren't filtered by "patient chosen" on screen (no patient switcher in 1a; one patient is chosen automatically).
 - `server/assistant.js` still uses the old (pre-M3) data calls. It must be updated when the assistant comes back in M12.

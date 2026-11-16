@@ -36,6 +36,15 @@ Enter it, then create your account (you become the **home admin**). After that:
 - Forgot a password, or locked out after 5 wrong tries? The home admin can **Unlock** or **Set temporary password** in Settings → People. (A lockout also ends by itself after 15 minutes.)
 - **My account** shows the devices you're signed in on, so you can sign out a lost phone.
 
+### Forgot the home admin password?
+
+If you are the home admin and nobody else can set a temporary password for you:
+1. On the Mac that runs MediTrack, double-click **`Reset Admin Password.command`** (first time: right-click → **Open** → **Open**).
+2. Check the account it shows (or pick it by number) and type `y`.
+3. Type a new password twice (at least 10 characters). Nothing shows while you type; that's normal.
+
+It changes only that password: it unlocks the account and signs it out on all devices. All other data stays as it is. It works whether MediTrack is running or not, and only on the Mac itself.
+
 ### Mac: run MediTrack in the background (recommended)
 
 So that phones and email alerts work all day, MediTrack should run by itself on the Mac.
