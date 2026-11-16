@@ -3,8 +3,9 @@
 const { useState, useEffect, useRef } = React;
 
 const http = async (method, path, body) => {
-  const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(window.mtPath(path), { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
+  if (!window.mtCheckAuth(r, data)) return new Promise(() => {});
   if (!r.ok) throw new Error(data.error || ('Request failed (' + r.status + ')'));
   return data;
 };
@@ -214,7 +215,7 @@ function ProviderCard({ p, tips, onEdit, onDelete, onAsk, onToggleFav }) {
       )}
       <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginTop: '.75rem' }}>
         {p.phone && <a className="btn btn-success btn-sm" href={telHref(p.phone)}>Call</a>}
-        <button className="btn btn-primary btn-sm" onClick={() => onAsk(p)}>Ask assistant</button>
+        {onAsk && <button className="btn btn-primary btn-sm" onClick={() => onAsk(p)}>Ask assistant</button>}
         <button className="btn btn-secondary btn-sm" onClick={() => onEdit(p)}>Edit</button>
         <button className="btn btn-danger btn-sm" onClick={() => onDelete(p)}>Delete</button>
       </div>
@@ -254,7 +255,7 @@ function CareTeamTab({ showAlert, onAskAssistant }) {
         <div className="empty-state"><div className="empty-icon">&#128222;</div><p>No providers yet. Add your DME companies and doctors, or search for providers near you.</p></div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: '1rem' }}>
-          {list.map(p => <ProviderCard key={p.id} p={p} tips={tips} onEdit={setEdit} onDelete={del} onAsk={ask} onToggleFav={fav} />)}
+          {list.map(p => <ProviderCard key={p.id} p={p} tips={tips} onEdit={setEdit} onDelete={del} onAsk={onAskAssistant ? ask : null} onToggleFav={fav} />)}
         </div>
       )}
       {edit && <ProviderModal provider={edit.id ? edit : null} showAlert={showAlert} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
@@ -320,7 +321,6 @@ function SetupWizard({ onDone, showAlert }) {
           <p style={{ marginBottom: '.5rem' }}>You're ready. Here's what you can do:</p>
           <ul style={{ marginLeft: '1.2rem', lineHeight: 1.7 }}>
             <li><strong>Care Team</strong>: phone, fax, email and department numbers, plus "what to say" scripts.</li>
-            <li><strong>Assistant</strong>: ask things like "Email Apria to request this month's feeding supplies" or "Help me get a new wheelchair approved."</li>
             <li><strong>Tasks</strong>: step-by-step checklists for things in progress.</li>
           </ul>
           <p style={{ marginTop: '.75rem', color: 'var(--gray-700)' }}>You can add more providers or edit your info any time.</p>
@@ -371,7 +371,7 @@ function TasksTab({ showAlert }) {
         </form>
       )}
       {!tasks ? <div className="loading"><div className="spinner" />Loading...</div> : tasks.length === 0 ? (
-        <div className="empty-state"><div className="empty-icon">&#9989;</div><p>No tasks here. Ask the assistant for help with something and it can make a checklist.</p></div>
+        <div className="empty-state"><div className="empty-icon">&#9989;</div><p>No tasks here.</p></div>
       ) : tasks.map(t => (
         <div key={t.id} className="card" style={{ opacity: t.status === 'done' ? .7 : 1 }}>
           <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>

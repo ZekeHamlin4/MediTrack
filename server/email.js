@@ -33,8 +33,8 @@ function getTransporter() {
   return transporter;
 }
 
-async function sendDraft(id) {
-  const d = care.getDraft(id);
+async function sendDraft(pid, id) {
+  const d = care.getDraft(pid, id);
   if (!d) { const e = new Error('Draft not found'); e.status = 404; throw e; }
   if (d.status === 'sent') { const e = new Error('Already sent'); e.status = 400; throw e; }
   if (!d.to_email) { const e = new Error('This draft has no recipient email address'); e.status = 400; throw e; }
@@ -44,12 +44,12 @@ async function sendDraft(id) {
       from: env('SMTP_FROM') || env('SMTP_USER'),
       to: d.to_email, subject: d.subject, text: d.body,
     });
-    db.prepare("UPDATE outbox SET status='sent', sent_at=CURRENT_TIMESTAMP, error=NULL WHERE id=?").run(id);
+    db.prepare("UPDATE outbox SET status='sent', sent_at=CURRENT_TIMESTAMP, error=NULL, version=version+1 WHERE id=? AND patient_id=?").run(id, pid);
   } catch (e) {
-    db.prepare("UPDATE outbox SET status='failed', error=? WHERE id=?").run(e.message, id);
+    db.prepare("UPDATE outbox SET status='failed', error=?, version=version+1 WHERE id=? AND patient_id=?").run(e.message, id, pid);
     throw e;
   }
-  return care.getDraft(id);
+  return care.getDraft(pid, id);
 }
 
 // Returns the most recent messages from the inbox. `query` filters on from/subject text.
@@ -92,9 +92,15 @@ router.get('/email/status', (req, res) => res.json(status()));
 router.get('/email/inbox', async (req, res) => {
   try { res.json(await readInbox(req.query)); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
+// Patient data: mounted at /api/patients/:pid (see index.js).
 // Only this endpoint sends mail, and only when the user taps "Send" in the app.
-router.post('/outbox/:id/send', async (req, res) => {
-  try { res.json(await sendDraft(req.params.id)); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+const patientRouter = express.Router();
+patientRouter.post('/outbox/:id/send', async (req, res) => {
+  try {
+    const sent = await sendDraft(req.patientId, req.params.id);
+    db.audit('email_sent', { userId: req.user.id, patientId: req.patientId, details: { outbox_id: sent.id } });
+    res.json(sent);
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
-module.exports = { router, status, readInbox, sendDraft };
+module.exports = { router, patientRouter, status, readInbox, sendDraft };
