@@ -17,6 +17,7 @@ web app shell and **M17** audit-log writes where each step needs them).
 | Fix 2: provider search by ZIP, nearest first | **Done** (needs a real-registry check on Zeke's Mac) |
 | Fix 3: search shown every time a provider is added | **Done** |
 | Reset home admin password (Mac tool) | **Done** (needs checking on Zeke's Mac) |
+| Company name searches all types | **Done** |
 | M10 Phone access over Tailscale | After the fixes |
 | M11 Documents | Not started |
 | M12 (email) + M18 Provider email alerts | Not started |
@@ -32,6 +33,59 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Company name searches every type (done)
+
+Zeke asked (Nov 16): "There's no 'All' option in 'Looking for'. When I type a company name, search every category automatically."
+
+### What was checked first
+- **Near a ZIP code (server):** with a company name, the registry was already asked by name only, with no type filter. But every result was **labelled** with the type picked in "Looking for". For example, an Acme pharmacy found while "DME" was selected was saved as DME.
+- **By city and state (server):** the same. Asked by name only, but every result was labelled with the chosen type.
+- **Screen:** it never filtered results by type. It always sent the chosen type along with the name, which the server ignored.
+- So nothing was hidden, but results were **mislabelled**, and the screen didn't say that all types were being searched.
+
+### What changed
+- **With a company name, both modes search every type**, and each office is labelled with **its own type**. The type comes from the registry's main specialty for that office: Pharmacy, DME / Medical Supply, Home Nursing, Hospital, Therapy, Primary Doctor, Specialist, or Other. The office is also saved to the Care Team with that type.
+  - The screen no longer sends a type when a name is typed.
+  - The server ignores the type whenever there's a name.
+  - A name made only of spaces counts as no name.
+- **On screen:** while "Company name" has text, "Looking for" shows **All types** (greyed out) with the note *"Searching all types for this company."* Clearing the name brings back the type chosen before; it isn't changed or forgotten.
+- **Every result shows a coloured type badge** (in both modes), so a pharmacy and a DME office of the same company are easy to tell apart.
+- **No general "All types" choice without a company name**, on purpose. A whole area or state with every type (all doctors, pharmacies, hospitals, ...) would return thousands of results and hit the registry limits. If Zeke wants it, it's a quick addition, but the list would need narrowing some other way.
+- Files: new `server/provider-types.js`; changed `server/care.js`, `server/nearby.js`, `client/care.jsx`, `server/test/nearby.test.js`.
+
+### How Zeke can test it (on the Mac, real registry)
+1. Restart MediTrack (double-click `Install MediTrack.command` again, or close and reopen the Start window).
+2. **Care Team** → **+ Add provider**.
+3. Set **Looking for** to **Pharmacy**. Then type a company you know has several kinds of offices (for example a big chain that has pharmacies and medical supply, or a hospital system) in **Company name**.
+4. "Looking for" now shows **All types**, greyed out, with "Searching all types for this company."
+5. Press **Search**. Results show offices of every type, each with a coloured badge (Pharmacy, DME / Medical Supply, ...), nearest first.
+6. Clear the **Company name** box. "Looking for" goes back to **Pharmacy**.
+7. Press **By city and state**, pick your city and state, type the same company name, and search. The same "All types" behaviour and badges appear.
+8. Tick one office and **Add**. In Care Team it shows the type from its badge.
+9. If a badge looks wrong (e.g. a supply company shown as "Other"), tell the builder the company name and what the registry calls its specialty (the line under the name).
+
+### How it was tested
+- `npm test`: **35 of 35 pass** (3 new tests):
+  - Specialty text → type, for each kind of provider.
+  - **Near a ZIP** with a name: the registry gets no type filter, all three offices of the same company come back, labelled pharmacy, DME and home nursing. Without a name, the chosen type is the filter and the label, as before.
+  - **By city and state** with a name: no type filter, all types kept and labelled. A spaces-only name → back to the chosen type.
+- **Do the tests catch mistakes?** I put back the old "label with the chosen type" code in city/state search: a test failed. I restored the fix.
+- **Browser (headless Chrome, phone size, pretend registry that records what it's asked):**
+  1. Picked Pharmacy, then typed "Acme": "All types", greyed, with the note.
+  2. ZIP search asked the registry by name only (no type). It showed Acme Health Pharmacy [Pharmacy], Acme Health Supply [DME / Medical Supply] and Acme Health Home Care [Home Nursing], nearest first.
+  3. Added the supply office.
+  4. Cleared the name: back to "Pharmacy", and the next search asked for Pharmacy again.
+  5. City and state mode did the same.
+  6. In Care Team, the saved office shows "DME / Medical Supply".
+  7. No page errors.
+- No automated test for the screen itself (no browser-test setup in the repo); the browser run above covers "clearing the name brings the type back".
+
+### Things to know
+- The type for each office comes from the registry's specialty wording. That wording can only be checked against the real registry. Unusual specialties show as "Other", and the type can be changed with **Edit**.
+- By city and state still shows at most **20 results**, as it always has. A big company with many offices in one state may not all appear. Near a ZIP code has no such limit within the distance. I can raise the 20 if Zeke wants.
 
 ---
 

@@ -1,5 +1,6 @@
 // Care team directory, tasks, email drafts, provider lookup, and call tips.
 const express = require('express');
+const { typeFromTaxonomy } = require('./provider-types');
 const db = require('./db');
 
 const PROVIDER_TYPES = ['doctor', 'specialist', 'dme', 'pharmacy', 'home_nursing', 'therapy', 'insurance', 'hospital', 'school', 'other'];
@@ -224,8 +225,11 @@ function createDraft(pid, { provider_id, task_id, to_email, subject, body }) {
 }
 
 // Searches the free public CMS NPPES NPI Registry. Returns phone and fax (no email: the registry doesn't publish it).
+// With a company name, every type is searched and each result gets its own type (from its specialty).
+// Without a name, the chosen type is searched, as before.
 async function lookupNpi({ city, state, postal_code, type, name, limit = 20 }) {
   if (!state && !postal_code) throw new Error('state or zip code is required');
+  name = String(name || '').trim();
   const params = new URLSearchParams({ version: '2.1', limit: String(Math.min(Number(limit) || 20, 50)) });
   if (city) params.set('city', city);
   if (state) params.set('state', state.toUpperCase());
@@ -250,7 +254,7 @@ async function lookupNpi({ city, state, postal_code, type, name, limit = 20 }) {
       fax: fmtPhone(loc.fax_number),
       address: [loc.address_1, loc.address_2].filter(Boolean).join(', '),
       city: loc.city || '', state: loc.state || '', zip: (loc.postal_code || '').slice(0, 5),
-      type: type || 'other',
+      type: name ? typeFromTaxonomy(primary.desc) : (type || 'other'),
     };
   });
 }
@@ -263,10 +267,12 @@ const wrap = fn => async (req, res) => {
 const router = express.Router();
 router.get('/call-tips', wrap((req, res) => res.json(CALL_TIPS)));
 // Search near a ZIP (Fix 2): offices sorted nearest first. City/state search above/below stays as it was.
-router.get('/lookup/nearby', wrap(async (req, res) => {
-  const { zip, type, name, radius } = req.query;
-  res.json(await require('./nearby').searchNearby({ zip, type: type || 'other', name, radius, taxonomy: name ? null : NPI_TAXONOMY[type] }));
-}));
+// With a company name: all types (no type filter is sent).
+function lookupNearby({ zip, type, name, radius }) {
+  name = String(name || '').trim();
+  return require('./nearby').searchNearby({ zip, type: name ? null : (type || 'other'), name, radius, taxonomy: name ? null : NPI_TAXONOMY[type] });
+}
+router.get('/lookup/nearby', wrap(async (req, res) => res.json(await lookupNearby(req.query))));
 router.get('/lookup', wrap(async (req, res) => {
   try { res.json(await lookupNpi(req.query)); }
   catch (e) { res.status(502).json({ error: 'Provider lookup failed: ' + e.message }); }
@@ -336,5 +342,5 @@ patientRouter.delete('/outbox/:id', wrap((req, res) => {
 module.exports = {
   router, patientRouter, CALL_TIPS, PROVIDER_TYPES,
   getProfile, updateProfile, listProviders, getProvider, createProvider, updateProvider,
-  listTasks, getTask, createTask, updateTask, createDraft, getDraft, lookupNpi,
+  listTasks, getTask, createTask, updateTask, createDraft, getDraft, lookupNpi, lookupNearby,
 };
