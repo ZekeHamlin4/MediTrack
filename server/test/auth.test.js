@@ -92,12 +92,26 @@ test('first-run setup: needs the setup code, then creates the home admin', async
   assert.equal(r.body.patients[0].is_patient_admin, true, 'home admin becomes the patient admin');
   adminCookie = r.cookie;
 
+  // Nothing typed twice: the child's profile already has "Your name" and "Your email" from the account.
+  const prof = (await req('GET', '/api/patients/1/profile', { cookie: adminCookie })).body;
+  assert.equal(prof.parent_name, ADMIN.name);
+  assert.equal(prof.parent_email, ADMIN.email);
+
   r = await req('POST', '/api/setup', { body: { ...ADMIN, code, email: 'other@example.test' } });
   assert.equal(r.status, 409, 'setup only works once');
   assert.equal((await req('GET', '/api/setup/status')).body.needs_setup, false);
   const stored = db.prepare('SELECT password_hash FROM users WHERE email = ?').get(ADMIN.email).password_hash;
   assert.match(stored, /^scrypt\$/);
   assert.ok(!stored.includes(ADMIN.password));
+});
+
+test('prefill never overwrites details already in the profile (upgraded installs)', () => {
+  const adminId = db.prepare('SELECT id FROM users WHERE email = ?').get(ADMIN.email).id;
+  db.prepare("UPDATE patients SET parent_name = 'Old Name', parent_email = '' WHERE id = 1").run();
+  auth.prefillParentFromAccount(adminId);
+  const p = db.prepare('SELECT parent_name, parent_email FROM patients WHERE id = 1').get();
+  assert.deepEqual(p, { parent_name: 'Old Name', parent_email: ADMIN.email });
+  db.prepare('UPDATE patients SET parent_name = ? WHERE id = 1').run(ADMIN.name);
 });
 
 test('every API route needs sign-in, except setup and sign-in', async () => {
