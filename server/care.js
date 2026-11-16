@@ -262,6 +262,11 @@ const wrap = fn => async (req, res) => {
 // Routes that don't touch patient data (signed-in users only; see index.js).
 const router = express.Router();
 router.get('/call-tips', wrap((req, res) => res.json(CALL_TIPS)));
+// Search near a ZIP (Fix 2): offices sorted nearest first. City/state search above/below stays as it was.
+router.get('/lookup/nearby', wrap(async (req, res) => {
+  const { zip, type, name, radius } = req.query;
+  res.json(await require('./nearby').searchNearby({ zip, type: type || 'other', name, radius, taxonomy: name ? null : NPI_TAXONOMY[type] }));
+}));
 router.get('/lookup', wrap(async (req, res) => {
   try { res.json(await lookupNpi(req.query)); }
   catch (e) { res.status(502).json({ error: 'Provider lookup failed: ' + e.message }); }

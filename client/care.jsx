@@ -46,51 +46,76 @@ function ContactRow({ label, value, href }) {
 }
 
 /* ---------------- Provider lookup (NPI registry) ---------------- */
+// Search the free national NPI registry. Two ways: near a ZIP (nearest offices first) or by city and state.
+const milesText = d => d < 1 ? 'less than 1 mile' : 'about ' + Math.round(d) + (Math.round(d) === 1 ? ' mile' : ' miles');
 function ProviderLookup({ profile, onSave, showAlert }) {
-  const [q, setQ] = useState({ city: profile?.city || '', state: profile?.state || '', zip: '', type: 'dme', name: '' });
+  const [mode, setMode] = useState(profile?.zip ? 'zip' : 'city');
+  const [q, setQ] = useState({ city: profile?.city || '', state: profile?.state || '', zip: profile?.zip || '', type: 'dme', name: '' });
   const [results, setResults] = useState([]);
   const [picked, setPicked] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [near, setNear] = useState(null); // { radius, truncated } after a ZIP search
+  const [searched, setSearched] = useState(false);
   const set = (k, v) => setQ(p => ({ ...p, [k]: v }));
-  const search = async e => {
-    e && e.preventDefault();
-    setLoading(true); setError(''); setPicked({});
+  const keyOf = r => r.key || r.npi;
+  const search = async (e, radius = 25) => {
+    e && e.preventDefault && e.preventDefault();
+    setLoading(true); setError(''); setPicked({}); setNear(null);
     try {
-      const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: q.zip, type: q.type, name: q.name });
-      setResults(await capi.get('/api/lookup?' + p));
+      if (mode === 'zip') {
+        const p = new URLSearchParams({ zip: q.zip, type: q.type, name: q.name, radius: String(radius) });
+        const r = await capi.get('/api/lookup/nearby?' + p);
+        setResults(r.results); setNear({ radius: r.radius, truncated: r.truncated });
+      } else {
+        const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: '', type: q.type, name: q.name });
+        setResults(await capi.get('/api/lookup?' + p));
+      }
     } catch (err) { setError(err.message); setResults([]); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setSearched(true); }
   };
   const save = async () => {
-    const list = results.filter(r => picked[r.npi]).map(r => ({ ...r, source: 'npi' }));
+    const list = results.filter(r => picked[keyOf(r)]).map(({ key, distance_miles, ...r }) => ({ ...r, source: 'npi' }));
     if (!list.length) return;
     await onSave(list);
     setPicked({});
     showAlert && showAlert('success', list.length + ' provider(s) added to your care team');
   };
   const count = Object.values(picked).filter(Boolean).length;
+  const canSearch = mode === 'zip' ? /^\d{5}$/.test(q.zip.trim()) : !!q.state;
+  const tab = (m, label) => <button type="button" className={'btn btn-sm ' + (mode === m ? 'btn-primary' : 'btn-secondary')} onClick={() => { setMode(m); setResults([]); setNear(null); setError(''); setSearched(false); }}>{label}</button>;
+  const wider = near && near.radius === 25 && <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: '.5rem' }} disabled={loading} onClick={() => search(null, 50)}>Search wider (50 miles)</button>;
   return (
     <div>
+      <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.6rem' }}>{tab('zip', 'Near a ZIP code')}{tab('city', 'By city and state')}</div>
       <form onSubmit={search} className="form-grid" style={{ marginBottom: '.75rem' }}>
         <div className="form-group"><label>Looking for</label>
           <select value={q.type} onChange={e => set('type', e.target.value)}>{LOOKUP_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}</select></div>
-        <div className="form-group"><label>City</label><input value={q.city} onChange={e => set('city', e.target.value)} /></div>
-        <div className="form-group"><label>State</label>
-          <select value={q.state} onChange={e => set('state', e.target.value)}><option value="">--</option>{US_STATES.map(s => <option key={s}>{s}</option>)}</select></div>
+        {mode === 'zip' ? (
+          <div className="form-group"><label>ZIP code</label><input inputMode="numeric" maxLength={5} value={q.zip} placeholder="e.g. 43215" onChange={e => set('zip', e.target.value.replace(/\D/g, ''))} /></div>
+        ) : (<>
+          <div className="form-group"><label>City</label><input value={q.city} onChange={e => set('city', e.target.value)} /></div>
+          <div className="form-group"><label>State</label>
+            <select value={q.state} onChange={e => set('state', e.target.value)}><option value="">--</option>{US_STATES.map(s => <option key={s}>{s}</option>)}</select></div>
+        </>)}
         <div className="form-group"><label>Company name (optional)</label><input value={q.name} placeholder="e.g. Apria, Aeroflow" onChange={e => set('name', e.target.value)} /></div>
-        <div className="form-group" style={{ justifyContent: 'flex-end' }}><button className="btn btn-primary" disabled={loading || (!q.state && !q.zip)}>{loading ? 'Searching...' : 'Search'}</button></div>
+        <div className="form-group" style={{ justifyContent: 'flex-end' }}><button className="btn btn-primary" disabled={loading || !canSearch}>{loading ? 'Searching...' : 'Search'}</button></div>
       </form>
-      <p style={{ fontSize: '.78rem', color: 'var(--gray-700)', marginBottom: '.5rem' }}>Results come from the free national NPI registry (phone and fax, no emails). Double-check numbers on your first call.</p>
+      <p style={{ fontSize: '.78rem', color: 'var(--gray-700)', marginBottom: '.5rem' }}>
+        Results come from the free national NPI registry (phone and fax, no emails). Double-check numbers on your first call.
+        {mode === 'zip' && ' Distances are straight-line miles between ZIP code centers, not driving distance.'}
+      </p>
       {error && <div className="alert alert-error">{error}</div>}
+      {near && <p style={{ fontSize: '.85rem', marginBottom: '.4rem' }}>{results.length ? `${results.length} found within ${near.radius} miles of ${q.zip}, nearest first.` : `Nothing found within ${near.radius} miles of ${q.zip}.`}{near.radius === 50 && !results.length && ' Try a company name, or search by city and state.'}</p>}
+      {near && near.truncated && <div className="alert alert-warning">There were more matches than MediTrack can show at once. Add a company name to narrow the search.</div>}
       {results.length > 0 && (
         <div>
           <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid var(--gray-200)', borderRadius: 8 }}>
             {results.map(r => (
-              <label key={r.npi} style={{ display: 'flex', gap: '.75rem', padding: '.6rem .75rem', borderBottom: '1px solid var(--gray-200)', cursor: 'pointer', fontWeight: 400 }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={!!picked[r.npi]} onChange={e => setPicked(p => ({ ...p, [r.npi]: e.target.checked }))} />
+              <label key={keyOf(r)} style={{ display: 'flex', gap: '.75rem', padding: '.6rem .75rem', borderBottom: '1px solid var(--gray-200)', cursor: 'pointer', fontWeight: 400 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={!!picked[keyOf(r)]} onChange={e => setPicked(p => ({ ...p, [keyOf(r)]: e.target.checked }))} />
                 <div style={{ fontSize: '.85rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--gray-900)' }}>{r.name}</div>
+                  <div style={{ fontWeight: 700, color: 'var(--gray-900)' }}>{r.name}{r.distance_miles != null && <span className="badge badge-blue" style={{ marginLeft: '.4rem' }}>{milesText(r.distance_miles)}</span>}</div>
                   <div>{r.specialty}</div>
                   <div style={{ color: 'var(--gray-700)' }}>{r.address}, {r.city}, {r.state} {r.zip}</div>
                   <div>{r.phone && <>Phone: {r.phone} </>}{r.fax && <> &middot; Fax: {r.fax}</>}</div>
@@ -101,7 +126,9 @@ function ProviderLookup({ profile, onSave, showAlert }) {
           <button className="btn btn-success" style={{ marginTop: '.75rem' }} disabled={!count} onClick={save}>Add {count || ''} selected to care team</button>
         </div>
       )}
-      {!loading && !error && results.length === 0 && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results yet.</p>}
+      {wider}
+      {!loading && !error && !searched && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results yet.</p>}
+      {!loading && !error && searched && !near && results.length === 0 && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results.</p>}
     </div>
   );
 }

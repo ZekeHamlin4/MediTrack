@@ -14,7 +14,7 @@ web app shell and **M17** audit-log writes where each step needs them).
 | M1 Data foundation and migration | **Done** |
 | M2 + M3 Sign-in and permission checks | **Done** (needs checking on Zeke's Mac and phone) |
 | Fix 1: nothing typed twice at first run | **Done** |
-| Fix 2: provider search by ZIP, nearest first | Proposal waiting for Zeke's approval |
+| Fix 2: provider search by ZIP, nearest first | **Done** (needs a real-registry check on Zeke's Mac) |
 | Fix 3: search shown every time a provider is added | Not started |
 | Reset home admin password (Mac tool) | Not started (after the 3 fixes) |
 | M10 Phone access over Tailscale | After the fixes |
@@ -32,6 +32,79 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Fix 2. Provider search near a ZIP, nearest first (done)
+
+Zeke approved the plan on Nov 16: **25 miles** by default with a **"Search wider (50 miles)"** button; **every office is its own row**, sorted nearest first (not grouped); **straight-line** distance between ZIP centers is fine.
+
+### What changed
+- The provider search (Care Team → "Find providers near me", and step 2 of the setup wizard) now has two buttons: **Near a ZIP code** and **By city and state**.
+  - "Near a ZIP code" is chosen first when the child's profile has a ZIP, and the ZIP is filled in from the profile.
+  - City and state search works exactly as before: same request to the registry, same results.
+- **How "nearest" works:**
+  1. MediTrack finds every ZIP within 25 miles (or 50) using a bundled list of ZIP centers.
+  2. It asks the NPI registry for those areas (by the first 3 ZIP digits, so it also crosses state lines). It asks for up to 3 pages of 200 per area.
+  3. It keeps practice offices only (a mailing address nearby doesn't count). Each office, including extra practice locations of the same provider, is its own row.
+  4. It measures straight-line miles from the center of the family's ZIP to the center of the office's ZIP, drops offices beyond the limit, and sorts nearest first.
+  5. Each row shows "about N miles" (or "less than 1 mile"). The same office returned twice is shown once.
+- **Messages:**
+  - Unknown ZIP: "We can't place ZIP … on the map (it may be a PO-box-only ZIP). Try a nearby ZIP, or search by city and state."
+  - No internet or the registry is down: "Provider search needs the internet right now … type the provider in yourself."
+  - More than 600 matches in an area: "There were more matches than MediTrack can show at once. Add a company name to narrow the search."
+- **What goes to the registry:** the ZIP's first 3 digits plus `*`, the provider type (or the company name) and page numbers. No patient information. No cost, no API key.
+- **ZIP data:** `server/data/zip-centroids.csv` (33,791 ZIP areas, about 0.9 MB), loaded when the first ZIP search runs.
+  - **Source:** US Census Bureau **2022** Gazetteer, ZIP Code Tabulation Areas national file (public domain).
+  - **Taken from** the npm package **us-zips 2022.9.1** (MIT licence, © 2021 Blake Knight), which packages that Census file. The Census website was blocked from the build machine.
+  - Source, date and licence text are in `server/data/zip-centroids-SOURCE.txt`.
+- **Files:** new `server/nearby.js`, `server/data/zip-centroids.csv`, `server/data/zip-centroids-SOURCE.txt`, `server/test/nearby.test.js`; changed `server/care.js` (new route `GET /api/lookup/nearby`, sign-in required), `client/care.jsx` (search screen).
+
+### How Zeke can test it (on the Mac, with the real registry)
+1. Restart MediTrack so it picks up the new version (double-click `Install MediTrack.command` again, or close and reopen the Start window).
+2. Sign in and open **Care Team** → **Find providers near me**.
+3. **Near a ZIP code** should already be selected, with your ZIP filled in (if the child's profile has one). Otherwise type your 5-digit ZIP.
+4. Leave "Looking for" on **DME / Medical Supply** and press **Search**. Expect a list "… found within 25 miles of [ZIP], nearest first", each row with "about N miles", the closest at the top. Check that a company you know shows up near the top with the right address.
+5. Press **Search wider (50 miles)**: more results, farther ones at the bottom.
+6. Type a company you use in **Company name** (e.g. Apria) and search again. Each of its offices should be its own row, nearest first.
+7. Tick one office and press **Add 1 selected to care team**. It appears in Care Team with that office's phone and fax.
+8. Type `00000` as the ZIP and search: a plain "can't place ZIP" message.
+9. Press **By city and state**, pick your city and state, and search: it should work as before.
+10. Please tell the builder if the counts look odd (very few results, or the "more matches than MediTrack can show" message for a plain DME search).
+
+### How it was tested
+- `npm test`: **28 of 28 pass**. The 11 new tests use a pretend registry:
+  - nearest first with correct miles, offices beyond 25 miles dropped and shown at 50
+  - the 3-digit ZIP areas asked for, and only ZIP, type and paging sent
+  - a company with 3 offices (one 99 miles away, dropped) plus a branch with its own NPI: 3 separate rows, nearest first
+  - a nearby mailing address doesn't count
+  - 450 results → 3 pages and all kept; 700 results → stops at 600 and shows the "more matches" note
+  - the same office twice → shown once
+  - company name search sends the name instead of the type
+  - Cincinnati search includes northern Kentucky
+  - unknown ZIP / bad ZIP → message, nothing sent
+  - registry unreachable or HTTP error → "needs the internet" message
+  - ZIP list loads and Columbus → Cincinnati is about 100 miles
+  - **city and state search sends exactly the same request as before** and returns the same fields
+- **Do the tests catch mistakes?** Removing the 25-mile cut-off made 3 tests fail; removing the nearest-first sort made 1 fail. Both were put back.
+- **Browser (headless Chrome, phone size, pretend registry):**
+  - In the setup wizard with ZIP 43215, "Near a ZIP code" was pre-selected and the ZIP filled in.
+  - 25 miles: 4 offices, nearest first ("less than 1 mile" … "about 12 miles"). The company with two offices showed 2 rows.
+  - 50 miles: 5 rows, the farthest "about 39 miles".
+  - Ticked both offices → both added to Care Team.
+  - ZIP 00000 → message. City and state search still returns results.
+  - No page errors.
+
+### Only checkable against the real registry (uncertain until Zeke tries it)
+- The registry couldn't be reached from the build machine, so the request format is based on its documentation. Things to confirm:
+  - that a ZIP ending in `*` (e.g. `432*`) is accepted
+  - that `skip` paging works
+  - that extra offices come back as `practiceLocations`
+  - how results look when a ZIP search matches mailing addresses (we filter those out)
+- If the wildcard isn't accepted, the search will show the "registry" error message. The fix would be to ask by exact 5-digit ZIPs instead.
+- Speed: a 25-mile search makes about 3 to 10 registry requests (4 at a time). It should take a few seconds; untested on a real connection.
+- ZIP data is from 2022. New ZIPs since then show the "can't place ZIP" message.
+- Straight-line distance between ZIP centers is accurate to a few miles. Mail-order DME companies with no nearby office won't rank as near.
 
 ---
 
