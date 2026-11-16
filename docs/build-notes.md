@@ -15,7 +15,7 @@ web app shell and **M17** audit-log writes where each step needs them).
 | M2 + M3 Sign-in and permission checks | **Done** (needs checking on Zeke's Mac and phone) |
 | Fix 1: nothing typed twice at first run | **Done** |
 | Fix 2: provider search by ZIP, nearest first | **Done** (needs a real-registry check on Zeke's Mac) |
-| Fix 3: search shown every time a provider is added | Not started |
+| Fix 3: search shown every time a provider is added | **Done** |
 | Reset home admin password (Mac tool) | Not started (after the 3 fixes) |
 | M10 Phone access over Tailscale | After the fixes |
 | M11 Documents | Not started |
@@ -32,6 +32,59 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Fix 3. The search shows every time a provider is added (done)
+
+### What was wrong
+There were four different ways to add a provider, and they didn't match:
+- **Care Team → "+ Add Provider"** opened only a blank form, with no search. This is what Zeke saw after saving one provider and adding another.
+- **Care Team → "Find providers near me"** was a separate button that opened the search without a "type it in" choice.
+- **Setup wizard, step 2:** two toggle buttons, "Search near me" and "Enter my own". After typing one in, the search came back, but the form and search swapped places, which was easy to lose track of.
+- **Editing** a provider uses the same form, which is fine; editing isn't adding.
+
+### What changed
+- **One "Add a provider" panel**, used both in Care Team and in step 2 of the setup wizard:
+  - The search is always shown first, with both choices (**Near a ZIP code**, with the ZIP from the child's profile, and **By city and state**).
+  - A **"Type it in myself"** button sits at the top, and again under the results ("Can't find it? Type it in myself"). It opens the blank form.
+  - After **saving** a typed-in provider, **cancelling** the form, or **adding** from the search results, the same panel stays open with the search. A green note says "Added … Search again to add another."
+- **Care Team** now has a single **+ Add provider** button. It opens the panel, which stays open for adding several in a row, until **Done adding**. When the list is empty, there's also a **+ Add provider** button in the middle of the page.
+- **Edit** on a provider card still opens the form with that provider's details.
+- If the child's profile loads after the panel opens, the ZIP, city and state still get filled in.
+- Files: `client/care.jsx`, `docs/build-notes.md`. No server changes.
+
+### How Zeke can test it (on the Mac)
+1. Restart MediTrack so it picks up the new version (double-click `Install MediTrack.command` again, or close and reopen the Start window).
+2. Sign in and open **Care Team**. Tap **+ Add provider**.
+3. You should see the search (**Near a ZIP code** selected, your ZIP filled in, and **By city and state** next to it) and a **Type it in myself** button.
+4. Search, tick one result, and tap **Add 1 selected to care team**. A green "Added …" note appears and the search is **still there**.
+5. Tap **Type it in myself**, type a test name (e.g. "Test Pharmacy"), and tap **Save**. The form closes and the **search is shown again**.
+6. Tap **Type it in myself** again, then **Cancel**. The search is shown again.
+7. Tap **Done adding**. Your new providers are in the list. Delete the test ones with **Delete** on their cards.
+8. Optional: on a test copy (see Fix 1's steps, port 3001), step 2 of the setup wizard shows the same panel. Add several in a row the same way.
+
+### How it was tested
+- `npm test`: 28 of 28 pass (no server code changed).
+- **Browser (headless Chrome, phone size, pretend registry, fresh install):**
+  - **Setup wizard step 2** opened with the search (ZIP 43215 filled in) and 2 "Type it in myself" buttons. Then, in a row:
+    1. search → add "Downtown DME" → search shown
+    2. type in "My Pharmacy" → Save → search shown
+    3. search → add "Dublin DME" → search shown
+    4. type in → Cancel → search shown
+    5. type in "Dr Smith" → Save → search shown
+
+    The wizard then listed all 4.
+  - **Care Team** now shows only **+ Add provider**. In a row:
+    1. it opened the search (ZIP filled in)
+    2. search → add "Big DME Co" → search shown
+    3. type in "School Nurse" → Save → search shown
+    4. type in → Cancel → search shown
+    5. **Done adding** hides the panel; **+ Add provider** opens the search again
+
+    The list had all 6 providers, and **Edit** on "Dr Smith" opened the form with that name.
+  - No page errors.
+- No automated test was added for the screen itself. The repo has no browser-test setup, and the check above needs a browser tool that only exists on the build machine. The server parts used here are already covered by `npm test`.
 
 ---
 
@@ -62,7 +115,7 @@ Zeke approved the plan on Nov 16: **25 miles** by default with a **"Search wider
 
 ### How Zeke can test it (on the Mac, with the real registry)
 1. Restart MediTrack so it picks up the new version (double-click `Install MediTrack.command` again, or close and reopen the Start window).
-2. Sign in and open **Care Team** → **Find providers near me**.
+2. Sign in and open **Care Team** → **+ Add provider** (since Fix 3; it used to say "Find providers near me").
 3. **Near a ZIP code** should already be selected, with your ZIP filled in (if the child's profile has one). Otherwise type your 5-digit ZIP.
 4. Leave "Looking for" on **DME / Medical Supply** and press **Search**. Expect a list "… found within 25 miles of [ZIP], nearest first", each row with "about N miles", the closest at the top. Check that a company you know shows up near the top with the right address.
 5. Press **Search wider (50 miles)**: more results, farther ones at the bottom.
