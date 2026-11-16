@@ -18,8 +18,8 @@ web app shell and **M17** audit-log writes where each step needs them).
 | Fix 3: search shown every time a provider is added | **Done** |
 | Reset home admin password (Mac tool) | **Done** (needs checking on Zeke's Mac) |
 | Company name searches all types | **Done** |
-| M10 Phone access over Tailscale | After the fixes |
-| M11 Documents | Not started |
+| M10 Phone access over Tailscale + M13 web app shell | **Done** (needs setting up and checking on Zeke's Mac and iPhone) |
+| M11 Documents | Next |
 | M12 (email) + M18 Provider email alerts | Not started |
 | M16 Nightly encrypted backup | Not started |
 
@@ -33,6 +33,90 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## M10. Phone access over Tailscale, plus the M13 web app shell (done)
+
+### What changed
+**Two connection modes** (spec M10). Settings key `connection_mode`; the default is **Home Wi-Fi only**, so nothing changes until Zeke switches.
+- **Home Wi-Fi only:** works as before. MediTrack listens on all network connections, and phones on the same Wi-Fi use `http://<Mac address>:3000`. This is the spec's "fallback" mode: plain HTTP, so no phone camera and no push later.
+- **Tailscale:** MediTrack listens on **this Mac only** (`127.0.0.1`), so nothing is open on the Wi-Fi. Phones reach it through `tailscale serve`, which gives a private HTTPS address like `https://mt-home.tail1234.ts.net`.
+- **Switching** happens in **Settings → Phone access**, with no restart: MediTrack answers the click, then moves its listener. The start-up text in the log/Start window shows the right address for the mode.
+- **Safety:** switching to Tailscale first checks the HTTPS address. If it isn't working, it asks "Switch anyway?", so Zeke can't lock his phones out by accident. The Mac itself always works at `http://localhost:3000`. Each switch is written to the audit log.
+
+**Settings → Phone access** (home admin only):
+- The current mode, plus the Wi-Fi address(es) while in Home Wi-Fi mode.
+- The **HTTPS address**, **found automatically** from the Tailscale app on the Mac (`tailscale status`). It looks in the usual install places, and the address can also be typed in. Only `https://<name>.<tailnet>.ts.net` addresses are accepted.
+- The **HTTPS check**, run every time Settings opens and with **Check again**. It calls the public `GET /api/health`, which answers only "ok", the app name and a random install id, to confirm the address reaches *this* MediTrack. Result: green "Working…" or an orange warning in plain words.
+- A **warning if the address contains the child's name** (spec: rename the Mac to something like `mt-home`).
+
+**Behind `tailscale serve`:**
+- **Same-origin check:** accepts the phone's address passed as `X-Forwarded-Host`, but **only for requests from the Mac itself** (where `tailscale serve` connects from). A device on the Wi-Fi can't use that header.
+- **Cookies** are `Secure` when the request came over HTTPS through `tailscale serve` (`X-Forwarded-Proto: https` from the Mac itself) or on the ts.net address.
+
+**Web app shell** (M13 shell only; bundling waits, as Phase 1a says):
+- `manifest.webmanifest` (name, colours, standalone), app icons (white cross on navy; 192, 512 and the iPhone 180 icon), and the iPhone Home Screen tags in `index.html`.
+- **Service worker** (`client/sw.js`): it does only one thing. When a page can't load because the Mac doesn't answer (or takes more than 8 seconds), it shows the **offline screen**: "MediTrack is offline. The home Mac is off, asleep or restarting. Notifications will resume when it's back." It also shows a checklist (Mac on and logged in? Tailscale on on this phone?) and **Try again**. Calm grey, as spec section 12 asks.
+- **It caches only `offline.html`**. Never the app, never API answers, never patient data. Pages, scripts and data always come fresh from the Mac.
+- **Safe updates:** because the app is never served from the cache, a stale copy can't get stuck on a phone. `sw.js` is sent with `no-store`, and the server stamps it with a version made from its own contents and `offline.html`. Any change installs the new worker, which deletes old caches. `index.html`, the `.jsx` files and the manifest are sent with `no-cache`.
+- The service worker only runs on secure addresses (the Tailscale HTTPS address, and `localhost` on the Mac). On plain Wi-Fi http there's no offline screen; that's a browser rule.
+
+**Other:** the installer's last message and the README now point to the new **"Phones: secure access with Tailscale"** steps (Mac, iPhone, nurse sharing).
+
+**Files:**
+- New: `server/network.js`, `client/sw.js`, `client/offline.html`, `client/manifest.webmanifest`, `client/icons/` (3 PNGs), `server/test/network.test.js`.
+- Changed: `server/index.js` (listens by mode, moves the listener), `server/app.js` (health check, Phone access routes, `/sw.js`, cache headers), `server/auth.js` (forwarded host only from the Mac itself), `client/account.jsx` (Phone access card), `client/index.html` (manifest, icons, worker registration), `server/test/auth.test.js`, `Install MediTrack.command`, `README.md`.
+
+### How Zeke sets it up and tests it
+Follow the README section **"Phones: secure access with Tailscale"** (Mac steps 1-7, then iPhone steps 1-3). Then:
+1. **Settings → Phone access** says **Working** with your `https://…ts.net` address, and no orange warnings.
+2. Tap **Use Tailscale only (recommended)**. "Now:" shows **Tailscale**.
+3. On the iPhone **with Wi-Fi turned off** (mobile data only, Tailscale on), open the MediTrack Home Screen icon: it loads and you can sign in. That proves it works away from home.
+4. Back on Wi-Fi with **Tailscale turned off** on the phone, try the old `http://<Mac address>:3000` address: it should **not** load (Tailscale mode closes it).
+5. **Offline screen:** open MediTrack from the Home Screen icon once (so it can store the offline screen). Then turn **Tailscale off** in the Tailscale app, close MediTrack (swipe it away), and open it from the icon again. Within about 8 seconds you see **"MediTrack is offline"**. Turn Tailscale back on and tap **Try again**: MediTrack opens.
+6. **Camera:** on the Tailscale address, open **Scan** → **Start Camera**. The iPhone asks for the camera and scanning works (it doesn't on plain http).
+7. Optional: **Allow home Wi-Fi again** brings back the old address; switch back to Tailscale afterwards.
+
+### How it was tested
+- `npm test`: **46 of 46 pass** (11 new in `network.test.js`, and the "every route needs sign-in" test now covers the Phone access routes and the public health check):
+  - **Addresses:** only ts.net HTTPS addresses are accepted. Auto-detect tries each install place and reads the Mac's name.
+  - **HTTPS check:** working / another server / no answer / error; the health answer holds no data.
+  - **Listening:** this Mac only in Tailscale mode, everything in Home Wi-Fi mode; the default is Home Wi-Fi.
+  - **Behind tailscale serve:** same-origin works with the kept Host or with X-Forwarded-Host from the Mac. X-Forwarded-Host from a Wi-Fi device → 403, another website → 403. Secure-cookie rules hold, and a full sign-in with tailscale serve headers gets a `Secure` cookie.
+  - **Phone access routes:** home admin only. A bad address → 400. Switching to Tailscale with a failing check → 409 "needs confirm"; with confirm → switched, the listener is told to move, and it's audited. Switching back works; an unknown mode → 400. The child's-name warning works.
+  - **`/sw.js`:** `no-store`, version filled in; manifest, offline page and icons are served; `index.html` links the manifest and registers the worker.
+  - **Service worker run in a pretend browser:**
+    - install caches **only** `/offline.html`, and activate deletes an old cache that held a stale page
+    - API calls, scripts and POSTs are left alone
+    - a page load gets the fresh page from the Mac and stores nothing
+    - when the Mac is unreachable, the offline screen shows
+  - **Real server process:** in Home Wi-Fi mode it was reachable on the machine's network address. After switching to Tailscale it was **not** reachable there but still reachable on 127.0.0.1, and the log said "Tailscale mode". After switching back it was reachable on the network again.
+- **Do the tests catch mistakes?** Making Tailscale mode listen everywhere made 2 tests fail, including the real-process test. Restored.
+- **Browser (headless Chrome on `localhost`, phone size):**
+  - the service worker became active and the manifest was linked
+  - Settings → Phone access showed "Home Wi-Fi only", the Wi-Fi address, and "No HTTPS address is set yet"
+  - after saving a ts.net address, **Use Tailscale only** asked "…isn't answering… Switch anyway?"; it switched, the server log said Tailscale mode, and **Allow home Wi-Fi again** switched back
+  - the only thing in the browser cache was `/offline.html`
+  - with the server **stopped**, reloading showed the offline screen with the checklist; after restarting the server, **Try again** opened the app, still signed in
+  - no page errors
+
+### Only checkable on Zeke's Mac and iPhone
+- Tailscale itself, and these details of `tailscale serve`, which I believe hold but couldn't confirm:
+  - the exact menu names
+  - that `tailscale serve --bg 3000` connects to `127.0.0.1:3000`
+  - that it passes the phone's address as Host or X-Forwarded-Host with `X-Forwarded-Proto: https`
+  - that the setting stays on after a restart
+
+  If phone sign-in fails with "This request did not come from MediTrack" over Tailscale, tell the builder.
+- Auto-detecting the address (`tailscale status --json`) depends on where the Tailscale app keeps its command line. If it isn't found, type the address in Settings.
+- iPhone: Add to Home Screen, the icon, the offline screen when Tailscale is off, and the camera on the HTTPS address.
+- Tailscale's free plan limits (users, shared nurses): check on tailscale.com/pricing (spec: **verify**).
+
+### Known gaps
+- Push notifications (and the "Turn on notifications" step) come with M12/M18.
+- No offline screen on plain Wi-Fi http (a browser rule); Tailscale mode is the intended setup.
+- The 8-second wait before the offline screen is a default; tell the builder if it feels too long or too short.
 
 ---
 

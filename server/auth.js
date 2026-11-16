@@ -120,7 +120,8 @@ function sameOrigin(req, res, next) {
   if (!src) { try { src = new URL(req.get('referer')).origin; } catch {} }
   let host = null;
   try { host = new URL(src).host; } catch {}
-  const allowed = [req.get('host'), req.get('x-forwarded-host')].filter(Boolean);
+  // `tailscale serve` passes the phone's address in X-Forwarded-Host; only trusted from this Mac itself.
+  const allowed = [req.get('host'), isLoopback(req.socket.remoteAddress) ? req.get('x-forwarded-host') : null].filter(Boolean);
   if (!host || !allowed.includes(host)) return res.status(403).json({ error: 'This request did not come from MediTrack.' });
   next();
 }
@@ -379,5 +380,5 @@ module.exports = {
   setupRouter, authRouter, adminRouter,
   // helpers
   prepareSetupCode, needsSetup, prefillParentFromAccount, hashPassword, verifyPassword, getSetupCode: () => setupCode,
-  SESSION_DAYS, MAX_FAILS, LOCK_MINUTES, COOKIE,
+  SESSION_DAYS, MAX_FAILS, LOCK_MINUTES, COOKIE, isHttps,
 };

@@ -213,6 +213,56 @@ async function signOut() {
   window.location.reload();
 }
 
+/* ---------- Settings → Phone access (home admin) ---------- */
+function PhoneAccess({ showAlert }) {
+  const [st, setSt] = useState(null);
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => { setSt(null); return http('GET', '/api/admin/network').then(x => { setSt(x); setUrl(x.https_url || ''); }).catch(e => showAlert('error', e.message)); };
+  useEffect(() => { load(); }, []);
+  const saveUrl = async () => { try { await http('PUT', '/api/admin/network', { https_url: url }); load(); } catch (e) { showAlert('error', e.message); } };
+  const switchTo = async (mode, force) => {
+    setBusy(true);
+    try {
+      await http('POST', '/api/admin/network/mode', { mode, force });
+      showAlert('success', mode === 'tailscale' ? 'Switched to Tailscale. MediTrack is no longer open on the Wi-Fi.' : 'Home Wi-Fi access is on again.');
+      setTimeout(load, 1500);
+    } catch (e) {
+      if (e.data && e.data.needs_confirm && window.confirm(e.message + '\n\nSwitch anyway?')) return switchTo(mode, true);
+      if (!(e.data && e.data.needs_confirm)) showAlert('error', e.message);
+    } finally { setBusy(false); }
+  };
+  if (!st) return <div className="card"><div className="card-title">Phone access</div><div className="loading"><div className="spinner" />Checking…</div></div>;
+  const ts = st.mode === 'tailscale';
+  return (
+    <div className="card">
+      <div className="card-title">Phone access</div>
+      <p style={{ fontSize: '.9rem' }}>
+        Now: {ts ? <span className="badge badge-green">Tailscale (secure, from anywhere)</span> : <span className="badge badge-orange">Home Wi-Fi only</span>}
+      </p>
+      {!ts && st.lan_urls.length > 0 && <p style={{ fontSize: '.85rem', color: 'var(--gray-700)' }}>Phones on your home Wi-Fi use: {st.lan_urls.join(' or ')}</p>}
+      <div className="form-group" style={{ margin: '.75rem 0' }}>
+        <label>HTTPS address (from Tailscale){st.detected_url && st.detected_url === st.https_url ? ' · found automatically' : ''}</label>
+        <div style={{ display: 'flex', gap: '.5rem' }}>
+          <input style={{ fontSize: '16px' }} value={url} placeholder="https://mt-home.tail1234.ts.net" onChange={e => setUrl(e.target.value)} />
+          {url !== (st.https_url || '') && <button className="btn btn-primary btn-sm" onClick={saveUrl}>Save</button>}
+        </div>
+      </div>
+      {st.https_ok
+        ? <div className="alert alert-success" style={{ display: 'block' }}>Working. Phones with Tailscale on can open <strong>{st.https_url}</strong></div>
+        : <div className="alert alert-warning" style={{ display: 'block' }}>{st.https_message}</div>}
+      {st.name_warning && <div className="alert alert-warning" style={{ display: 'block' }}>{st.name_warning}</div>}
+      <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
+        <button className="btn btn-secondary" onClick={load} disabled={busy}>Check again</button>
+        {ts
+          ? <button className="btn btn-secondary" onClick={() => { if (window.confirm('Allow phones on your home Wi-Fi to use plain http://… again? Less safe; Tailscale keeps working too.')) switchTo('lan'); }} disabled={busy}>Allow home Wi-Fi again</button>
+          : <button className="btn btn-primary" onClick={() => switchTo('tailscale')} disabled={busy}>Use Tailscale only (recommended)</button>}
+      </div>
+      <p style={{ fontSize: '.8rem', color: 'var(--gray-700)', marginTop: '.6rem' }}>Setup steps for the Mac and phones are in the README, under "Phones: secure access with Tailscale".</p>
+    </div>
+  );
+}
+
 /* ---------- Settings → People (home admin) ---------- */
 function SettingsTab({ me, showAlert }) {
   const [people, setPeople] = useState(null);
@@ -239,6 +289,7 @@ function SettingsTab({ me, showAlert }) {
   return (
     <div>
       <div className="section-title">Settings</div>
+      <PhoneAccess showAlert={showAlert} />
       <div className="card">
         <div className="card-title" style={{ justifyContent: 'space-between' }}>People
           {!adding && <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>+ Add person</button>}

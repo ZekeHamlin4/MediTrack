@@ -74,7 +74,42 @@ MediTrack can only answer phones and send alerts while the Mac is **on, awake an
 
 Menu names differ a little between macOS versions. If you can't find one, search for it in System Settings.
 
-**On your phone:** the black window shows a "On your phone" address like `http://192.168.1.20:3000`. Open it on a phone on the same Wi-Fi, then use **Add to Home Screen** to get an app icon. It works while the computer is on and MediTrack is running.
+**On your phone:** the best way is Tailscale (next section): secure, works away from home, and lets the phone camera scan barcodes. Until you set it up, the black window shows a "On your phone" address like `http://192.168.1.20:3000` that works on a phone on the same Wi-Fi.
+
+### Phones: secure access with Tailscale
+
+Tailscale is a free app that links your family's phones to the Mac privately, at home or away. MediTrack is never open to the internet. Do this once (about 15 minutes). Menu names can differ slightly between versions.
+
+**On the Mac**
+1. Install **Tailscale** from the Mac App Store (or tailscale.com/download). Open it and **sign in**. Create a free account the first time, for example with your Apple or Google account. Use this same account on your family's phones.
+2. Click the Tailscale icon in the menu bar → **Settings** → turn on **Launch at login**.
+3. In a browser, open **https://login.tailscale.com/admin/dns**:
+   - turn on **MagicDNS**
+   - under **HTTPS Certificates**, click **Enable HTTPS**
+4. Open **https://login.tailscale.com/admin/machines**, click **⋯** next to your Mac → **Edit machine name** → type **`mt-home`**. Never use your child's name: the name appears in the web address.
+5. Turn on Tailscale's command line: Tailscale menu → **Settings** → **Install CLI** (it may be called "Command Line Integration").
+6. Open **Terminal** (Applications → Utilities), paste this line and press Return:
+   ```
+   tailscale serve --bg 3000
+   ```
+   If it says "command not found", paste this instead:
+   ```
+   /Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 3000
+   ```
+   If it shows a link asking you to allow HTTPS or Serve, open the link, allow it, and run the line again. It shows your address, like `https://mt-home.tail1234.ts.net`. You only do this once; it stays on after restarts.
+   Never use `tailscale funnel`: that would put MediTrack on the public internet.
+7. In MediTrack: **Settings → Phone access → Check again**. It should say **Working**. Then tap **Use Tailscale only (recommended)**. MediTrack now only answers through Tailscale (and on the Mac itself). The plain Wi-Fi address stops working, on purpose.
+
+**On each iPhone (you, your partner)**
+1. Install **Tailscale** from the App Store. Open it, **sign in with the same account** as the Mac, and allow it to add a VPN configuration.
+2. In **Safari**, open the address from Settings → Phone access (like `https://mt-home.tail1234.ts.net`) and sign in to MediTrack.
+3. Tap **Share** (the square with an arrow) → **Add to Home Screen** → **Add**. From now on, open MediTrack from that icon.
+
+**For a nurse:** they install Tailscale and sign in with **their own** free account. On the Mac, open **https://login.tailscale.com/admin/machines** → **⋯** next to `mt-home` → **Share…**, and send them the invite. Once they accept, they do iPhone steps 2-3. Add them in MediTrack under **Settings → People** as usual.
+
+**If the Mac is off:** the Home Screen app shows "MediTrack is offline" with a **Try again** button. Your data is safe on the Mac.
+
+**Switching back:** Settings → Phone access → **Allow home Wi-Fi again** turns the plain Wi-Fi address back on (less safe). Tailscale keeps working too.
 
 <details><summary>Advanced: start from a terminal instead</summary>
 

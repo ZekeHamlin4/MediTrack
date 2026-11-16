@@ -44,7 +44,8 @@ let adminCookie;
 // Every route in every router, with the prefix it is mounted on.
 function allRoutes() {
   const groups = [
-    ['/api', auth.setupRouter], ['/api', auth.authRouter], ['/api/admin', auth.adminRouter],
+    ['/api', auth.setupRouter], ['/api', auth.authRouter], ['/api/admin', auth.adminRouter], ['/api/admin', require('../network').adminRouter],
+    ['/api', require('../network').healthRouter],
     ['/api', care.router], ['/api', email.router],
     ['/api/patients/1', care.patientRouter], ['/api/patients/1', email.patientRouter], ['/api/patients/1', supplies.patientRouter],
   ];
@@ -59,7 +60,7 @@ function allRoutes() {
   }
   return out;
 }
-const PUBLIC = ['GET /api/setup/status', 'POST /api/setup', 'POST /api/auth/login', 'POST /api/auth/logout'];
+const PUBLIC = ['GET /api/health', 'GET /api/setup/status', 'POST /api/setup', 'POST /api/auth/login', 'POST /api/auth/logout'];
 
 test('first-run setup: needs the setup code, then creates the home admin', async () => {
   assert.equal((await req('GET', '/api/setup/status')).body.needs_setup, true);
