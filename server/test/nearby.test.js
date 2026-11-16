@@ -5,12 +5,12 @@ const assert = require('node:assert');
 const nearby = require('../nearby');
 
 // A pretend registry: records listed per 3-digit ZIP area. Records each the shape the real registry uses.
-function rec(number, name, locZip, { extra = [], mailingZip, phone = '6145550100' } = {}) {
+function rec(number, name, locZip, { extra = [], mailingZip, phone = '6145550100', desc = 'Durable Medical Equipment & Medical Supplies' } = {}) {
   const addr = (zip, purpose) => ({ address_purpose: purpose, address_1: '1 Main St', city: 'Town', state: 'OH', postal_code: zip + '1234', telephone_number: phone, fax_number: '6145550199' });
   return {
     number,
     basic: { organization_name: name },
-    taxonomies: [{ primary: true, desc: 'Durable Medical Equipment & Medical Supplies' }],
+    taxonomies: [{ primary: true, desc }],
     addresses: [addr(locZip, 'LOCATION'), addr(mailingZip || locZip, 'MAILING')],
     practiceLocations: extra.map(z => ({ ...addr(z, undefined), address_1: '9 Branch Rd ' + z })),
   };
@@ -122,9 +122,22 @@ test('ZIP list is loaded and distances are sensible', () => {
   assert.ok(d > 95 && d < 105, 'Columbus to Cincinnati is about 100 miles');
 });
 
+let careModule = null;
+function loadCare() {
+  if (!careModule) {
+    process.env.MEDITRACK_DB_PATH = require('path').join(require('os').tmpdir(), `meditrack-nearby-test-${process.pid}.db`);
+    careModule = require('../care');
+  }
+  return careModule;
+}
+test.after(() => {
+  if (!careModule) return;
+  require('../db').close();
+  for (const f of require('fs').readdirSync(require('os').tmpdir())) if (f.startsWith(`meditrack-nearby-test-${process.pid}`)) require('fs').rmSync(require('path').join(require('os').tmpdir(), f));
+});
+
 test('city and state search is unchanged', async () => {
-  process.env.MEDITRACK_DB_PATH = require('path').join(require('os').tmpdir(), `meditrack-nearby-test-${process.pid}.db`);
-  const care = require('../care');
+  const care = loadCare();
   const original = globalThis.fetch;
   let asked;
   globalThis.fetch = async url => { asked = new URL(url); return { ok: true, json: async () => ({ results: [rec(50, 'City DME', '43215')] }) }; };
@@ -135,7 +148,60 @@ test('city and state search is unchanged', async () => {
     assert.deepEqual(Object.keys(r[0]).sort(), ['address', 'city', 'fax', 'name', 'npi', 'phone', 'specialty', 'state', 'type', 'zip']);
   } finally {
     globalThis.fetch = original;
-    require('../db').close();
-    for (const f of require('fs').readdirSync(require('os').tmpdir())) if (f.startsWith(`meditrack-nearby-test-${process.pid}`)) require('fs').rmSync(require('path').join(require('os').tmpdir(), f));
   }
+});
+
+// ---------- company name searches cover every type ----------
+const { typeFromTaxonomy } = require('../provider-types');
+
+test('specialty text gives each office its own type', () => {
+  const cases = {
+    'Durable Medical Equipment & Medical Supplies': 'dme', 'Pharmacy, Community/Retail Pharmacy': 'pharmacy',
+    'Home Health': 'home_nursing', 'General Acute Care Hospital': 'hospital', 'Physical Therapist': 'therapy',
+    'Pediatrics': 'doctor', 'Pediatrics, Pediatric Pulmonology': 'specialist', 'Something New': 'other', '': 'other',
+  };
+  for (const [desc, type] of Object.entries(cases)) assert.equal(typeFromTaxonomy(desc), type, desc);
+});
+
+const sameCompany = () => ({
+  432: [rec(60, 'Acme Health', '43215', { desc: 'Pharmacy, Community/Retail Pharmacy' }),
+        rec(61, 'Acme Health', '43215', { desc: 'Durable Medical Equipment & Medical Supplies' }),
+        rec(62, 'Acme Health', '43215', { desc: 'Home Health' })],
+});
+
+test('near a ZIP with a company name: no type filter sent, every type kept, each labelled', async () => {
+  const care = loadCare();
+  const reg = fakeRegistry(sameCompany());
+  const original = globalThis.fetch; globalThis.fetch = reg.fetchFn;
+  try {
+    const r = await care.lookupNearby({ zip: '43215', type: 'dme', name: '  Acme ' });
+    for (const c of reg.calls) {
+      assert.equal(c.taxonomy_description, undefined, 'no type filter');
+      assert.equal(c.organization_name, 'Acme*');
+    }
+    assert.deepEqual(r.results.map(x => x.type).sort(), ['dme', 'home_nursing', 'pharmacy']);
+    // Without a name: the chosen type is the filter and the label, as before.
+    reg.calls.length = 0;
+    const plain = await care.lookupNearby({ zip: '43215', type: 'dme', name: '' });
+    assert.ok(reg.calls.every(c => c.taxonomy_description === 'Durable Medical Equipment' && c.organization_name === undefined));
+    assert.ok(plain.results.every(x => x.type === 'dme'));
+  } finally { globalThis.fetch = original; }
+});
+
+test('city and state with a company name: no type filter sent, every type kept, each labelled', async () => {
+  const care = loadCare();
+  let asked;
+  const original = globalThis.fetch;
+  globalThis.fetch = async url => { asked = new URL(url); return { ok: true, json: async () => ({ results: sameCompany()[432] }) }; };
+  try {
+    const r = await care.lookupNpi({ city: 'Columbus', state: 'OH', postal_code: '', type: 'dme', name: 'Acme' });
+    const params = Object.fromEntries(asked.searchParams);
+    assert.equal(params.organization_name, 'Acme*');
+    assert.equal(params.taxonomy_description, undefined);
+    assert.deepEqual(r.map(x => x.type).sort(), ['dme', 'home_nursing', 'pharmacy']);
+    // A name made only of spaces counts as no name: back to the chosen type.
+    await care.lookupNpi({ city: 'Columbus', state: 'OH', type: 'pharmacy', name: '   ' });
+    assert.equal(asked.searchParams.get('taxonomy_description'), 'Pharmacy');
+    assert.equal(asked.searchParams.get('organization_name'), null);
+  } finally { globalThis.fetch = original; }
 });

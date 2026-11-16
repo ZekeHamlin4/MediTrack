@@ -9,6 +9,7 @@
 // patient information.
 const fs = require('fs');
 const path = require('path');
+const { typeFromTaxonomy } = require('./provider-types');
 
 const REGISTRY = 'https://npiregistry.cms.hhs.gov/api/';
 const PAGE = 200;            // the registry's maximum per request
@@ -67,6 +68,7 @@ async function fetchArea(prefix, { taxonomy, name }, fetchFn) {
   let truncated = false;
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = new URLSearchParams({ version: '2.1', limit: String(PAGE), skip: String(page * PAGE), postal_code: prefix + '*' });
+    name = String(name || '').trim();
     if (name) params.set('organization_name', name.trim().endsWith('*') ? name.trim() : name.trim() + '*');
     else if (taxonomy) params.set('taxonomy_description', taxonomy);
     let data;
@@ -101,7 +103,7 @@ function officesOf(r, type) {
     fax: fmtPhone(loc.fax_number),
     address: [loc.address_1, loc.address_2].filter(Boolean).join(', '),
     city: loc.city || '', state: loc.state || '', zip: String(loc.postal_code || '').slice(0, 5),
-    type: type || 'other',
+    type: type || typeFromTaxonomy(primary.desc), // no type chosen (company-name search): use the office's own
   }));
 }
 

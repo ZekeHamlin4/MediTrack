@@ -157,10 +157,11 @@ cat <<'EOT'
   1. Keep the Mac awake: see "Keep the Mac awake" in the README
      (Battery or Energy setting; MacBook lid open and charger plugged in).
   2. After the Mac restarts, log in once so MediTrack comes back.
-  3. Phones: secure access from anywhere (Tailscale) comes in a later step.
+  3. Phones: set up Tailscale for secure access from anywhere. See "Phones: secure
+     access with Tailscale" in the README (about 15 minutes, once).
 EOT
 if [ -n "$LAN_IP" ]; then
-  echo "     Until then, a phone on the same Wi-Fi can open: http://$LAN_IP:3000"
+  echo "     Until you switch to Tailscale mode, a phone on the same Wi-Fi can open: http://$LAN_IP:3000"
 fi
 cat <<'EOT'
 

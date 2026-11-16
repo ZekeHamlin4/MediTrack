@@ -64,16 +64,19 @@ function ProviderLookup({ profile, onSave, showAlert }) {
     if (profile.zip) setMode(m => (results.length ? m : 'zip'));
   }, [profile && profile.zip, profile && profile.city, profile && profile.state]);
   const keyOf = r => r.key || r.npi;
+  // A company name searches every type. "Looking for" shows "All types" until the name is cleared,
+  // then it goes back to the type that was chosen before (q.type is never changed here).
+  const allTypes = q.name.trim() !== '';
   const search = async (e, radius = 25) => {
     e && e.preventDefault && e.preventDefault();
     setLoading(true); setError(''); setPicked({}); setNear(null);
     try {
       if (mode === 'zip') {
-        const p = new URLSearchParams({ zip: q.zip, type: q.type, name: q.name, radius: String(radius) });
+        const p = new URLSearchParams({ zip: q.zip, type: allTypes ? '' : q.type, name: q.name.trim(), radius: String(radius) });
         const r = await capi.get('/api/lookup/nearby?' + p);
         setResults(r.results); setNear({ radius: r.radius, truncated: r.truncated });
       } else {
-        const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: '', type: q.type, name: q.name });
+        const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: '', type: allTypes ? '' : q.type, name: q.name.trim() });
         setResults(await capi.get('/api/lookup?' + p));
       }
     } catch (err) { setError(err.message); setResults([]); }
@@ -95,7 +98,11 @@ function ProviderLookup({ profile, onSave, showAlert }) {
       <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.6rem' }}>{tab('zip', 'Near a ZIP code')}{tab('city', 'By city and state')}</div>
       <form onSubmit={search} className="form-grid" style={{ marginBottom: '.75rem' }}>
         <div className="form-group"><label>Looking for</label>
-          <select value={q.type} onChange={e => set('type', e.target.value)}>{LOOKUP_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}</select></div>
+          <select value={allTypes ? 'all' : q.type} disabled={allTypes} onChange={e => set('type', e.target.value)}>
+            {allTypes && <option value="all">All types</option>}
+            {LOOKUP_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+          </select>
+          {allTypes && <span style={{ fontSize: '.78rem', color: 'var(--gray-700)' }}>Searching all types for this company.</span>}</div>
         {mode === 'zip' ? (
           <div className="form-group"><label>ZIP code</label><input inputMode="numeric" maxLength={5} value={q.zip} placeholder="e.g. 43215" onChange={e => set('zip', e.target.value.replace(/\D/g, ''))} /></div>
         ) : (<>
@@ -121,6 +128,7 @@ function ProviderLookup({ profile, onSave, showAlert }) {
                 <input type="checkbox" style={{ width: 'auto' }} checked={!!picked[keyOf(r)]} onChange={e => setPicked(p => ({ ...p, [keyOf(r)]: e.target.checked }))} />
                 <div style={{ fontSize: '.85rem' }}>
                   <div style={{ fontWeight: 700, color: 'var(--gray-900)' }}>{r.name}{r.distance_miles != null && <span className="badge badge-blue" style={{ marginLeft: '.4rem' }}>{milesText(r.distance_miles)}</span>}</div>
+                  <div><span className="badge" style={{ background: (TYPE_COLORS[r.type] || '#616161') + '22', color: TYPE_COLORS[r.type] || '#616161' }}>{TYPE_LABELS[r.type] || 'Other'}</span></div>
                   <div>{r.specialty}</div>
                   <div style={{ color: 'var(--gray-700)' }}>{r.address}, {r.city}, {r.state} {r.zip}</div>
                   <div>{r.phone && <>Phone: {r.phone} </>}{r.fax && <> &middot; Fax: {r.fax}</>}</div>
