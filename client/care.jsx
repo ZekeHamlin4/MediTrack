@@ -46,51 +46,81 @@ function ContactRow({ label, value, href }) {
 }
 
 /* ---------------- Provider lookup (NPI registry) ---------------- */
+// Search the free national NPI registry. Two ways: near a ZIP (nearest offices first) or by city and state.
+const milesText = d => d < 1 ? 'less than 1 mile' : 'about ' + Math.round(d) + (Math.round(d) === 1 ? ' mile' : ' miles');
 function ProviderLookup({ profile, onSave, showAlert }) {
-  const [q, setQ] = useState({ city: profile?.city || '', state: profile?.state || '', zip: '', type: 'dme', name: '' });
+  const [mode, setMode] = useState(profile?.zip ? 'zip' : 'city');
+  const [q, setQ] = useState({ city: profile?.city || '', state: profile?.state || '', zip: profile?.zip || '', type: 'dme', name: '' });
   const [results, setResults] = useState([]);
   const [picked, setPicked] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [near, setNear] = useState(null); // { radius, truncated } after a ZIP search
+  const [searched, setSearched] = useState(false);
   const set = (k, v) => setQ(p => ({ ...p, [k]: v }));
-  const search = async e => {
-    e && e.preventDefault();
-    setLoading(true); setError(''); setPicked({});
+  useEffect(() => {
+    if (!profile) return;
+    setQ(x => ({ ...x, zip: x.zip || profile.zip || '', city: x.city || profile.city || '', state: x.state || profile.state || '' }));
+    if (profile.zip) setMode(m => (results.length ? m : 'zip'));
+  }, [profile && profile.zip, profile && profile.city, profile && profile.state]);
+  const keyOf = r => r.key || r.npi;
+  const search = async (e, radius = 25) => {
+    e && e.preventDefault && e.preventDefault();
+    setLoading(true); setError(''); setPicked({}); setNear(null);
     try {
-      const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: q.zip, type: q.type, name: q.name });
-      setResults(await capi.get('/api/lookup?' + p));
+      if (mode === 'zip') {
+        const p = new URLSearchParams({ zip: q.zip, type: q.type, name: q.name, radius: String(radius) });
+        const r = await capi.get('/api/lookup/nearby?' + p);
+        setResults(r.results); setNear({ radius: r.radius, truncated: r.truncated });
+      } else {
+        const p = new URLSearchParams({ city: q.city, state: q.state, postal_code: '', type: q.type, name: q.name });
+        setResults(await capi.get('/api/lookup?' + p));
+      }
     } catch (err) { setError(err.message); setResults([]); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setSearched(true); }
   };
   const save = async () => {
-    const list = results.filter(r => picked[r.npi]).map(r => ({ ...r, source: 'npi' }));
+    const list = results.filter(r => picked[keyOf(r)]).map(({ key, distance_miles, ...r }) => ({ ...r, source: 'npi' }));
     if (!list.length) return;
     await onSave(list);
     setPicked({});
     showAlert && showAlert('success', list.length + ' provider(s) added to your care team');
   };
   const count = Object.values(picked).filter(Boolean).length;
+  const canSearch = mode === 'zip' ? /^\d{5}$/.test(q.zip.trim()) : !!q.state;
+  const tab = (m, label) => <button type="button" className={'btn btn-sm ' + (mode === m ? 'btn-primary' : 'btn-secondary')} onClick={() => { setMode(m); setResults([]); setNear(null); setError(''); setSearched(false); }}>{label}</button>;
+  const wider = near && near.radius === 25 && <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: '.5rem' }} disabled={loading} onClick={() => search(null, 50)}>Search wider (50 miles)</button>;
   return (
     <div>
+      <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.6rem' }}>{tab('zip', 'Near a ZIP code')}{tab('city', 'By city and state')}</div>
       <form onSubmit={search} className="form-grid" style={{ marginBottom: '.75rem' }}>
         <div className="form-group"><label>Looking for</label>
           <select value={q.type} onChange={e => set('type', e.target.value)}>{LOOKUP_TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}</select></div>
-        <div className="form-group"><label>City</label><input value={q.city} onChange={e => set('city', e.target.value)} /></div>
-        <div className="form-group"><label>State</label>
-          <select value={q.state} onChange={e => set('state', e.target.value)}><option value="">--</option>{US_STATES.map(s => <option key={s}>{s}</option>)}</select></div>
+        {mode === 'zip' ? (
+          <div className="form-group"><label>ZIP code</label><input inputMode="numeric" maxLength={5} value={q.zip} placeholder="e.g. 43215" onChange={e => set('zip', e.target.value.replace(/\D/g, ''))} /></div>
+        ) : (<>
+          <div className="form-group"><label>City</label><input value={q.city} onChange={e => set('city', e.target.value)} /></div>
+          <div className="form-group"><label>State</label>
+            <select value={q.state} onChange={e => set('state', e.target.value)}><option value="">--</option>{US_STATES.map(s => <option key={s}>{s}</option>)}</select></div>
+        </>)}
         <div className="form-group"><label>Company name (optional)</label><input value={q.name} placeholder="e.g. Apria, Aeroflow" onChange={e => set('name', e.target.value)} /></div>
-        <div className="form-group" style={{ justifyContent: 'flex-end' }}><button className="btn btn-primary" disabled={loading || (!q.state && !q.zip)}>{loading ? 'Searching...' : 'Search'}</button></div>
+        <div className="form-group" style={{ justifyContent: 'flex-end' }}><button className="btn btn-primary" disabled={loading || !canSearch}>{loading ? 'Searching...' : 'Search'}</button></div>
       </form>
-      <p style={{ fontSize: '.78rem', color: 'var(--gray-700)', marginBottom: '.5rem' }}>Results come from the free national NPI registry (phone and fax, no emails). Double-check numbers on your first call.</p>
+      <p style={{ fontSize: '.78rem', color: 'var(--gray-700)', marginBottom: '.5rem' }}>
+        Results come from the free national NPI registry (phone and fax, no emails). Double-check numbers on your first call.
+        {mode === 'zip' && ' Distances are straight-line miles between ZIP code centers, not driving distance.'}
+      </p>
       {error && <div className="alert alert-error">{error}</div>}
+      {near && <p style={{ fontSize: '.85rem', marginBottom: '.4rem' }}>{results.length ? `${results.length} found within ${near.radius} miles of ${q.zip}, nearest first.` : `Nothing found within ${near.radius} miles of ${q.zip}.`}{near.radius === 50 && !results.length && ' Try a company name, or search by city and state.'}</p>}
+      {near && near.truncated && <div className="alert alert-warning">There were more matches than MediTrack can show at once. Add a company name to narrow the search.</div>}
       {results.length > 0 && (
         <div>
           <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid var(--gray-200)', borderRadius: 8 }}>
             {results.map(r => (
-              <label key={r.npi} style={{ display: 'flex', gap: '.75rem', padding: '.6rem .75rem', borderBottom: '1px solid var(--gray-200)', cursor: 'pointer', fontWeight: 400 }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={!!picked[r.npi]} onChange={e => setPicked(p => ({ ...p, [r.npi]: e.target.checked }))} />
+              <label key={keyOf(r)} style={{ display: 'flex', gap: '.75rem', padding: '.6rem .75rem', borderBottom: '1px solid var(--gray-200)', cursor: 'pointer', fontWeight: 400 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={!!picked[keyOf(r)]} onChange={e => setPicked(p => ({ ...p, [keyOf(r)]: e.target.checked }))} />
                 <div style={{ fontSize: '.85rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--gray-900)' }}>{r.name}</div>
+                  <div style={{ fontWeight: 700, color: 'var(--gray-900)' }}>{r.name}{r.distance_miles != null && <span className="badge badge-blue" style={{ marginLeft: '.4rem' }}>{milesText(r.distance_miles)}</span>}</div>
                   <div>{r.specialty}</div>
                   <div style={{ color: 'var(--gray-700)' }}>{r.address}, {r.city}, {r.state} {r.zip}</div>
                   <div>{r.phone && <>Phone: {r.phone} </>}{r.fax && <> &middot; Fax: {r.fax}</>}</div>
@@ -101,7 +131,31 @@ function ProviderLookup({ profile, onSave, showAlert }) {
           <button className="btn btn-success" style={{ marginTop: '.75rem' }} disabled={!count} onClick={save}>Add {count || ''} selected to care team</button>
         </div>
       )}
-      {!loading && !error && results.length === 0 && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results yet.</p>}
+      {wider}
+      {!loading && !error && !searched && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results yet.</p>}
+      {!loading && !error && searched && !near && results.length === 0 && <p style={{ fontSize: '.85rem', color: 'var(--gray-500)' }}>No results.</p>}
+    </div>
+  );
+}
+
+/* ---------------- Add a provider (used by Care Team and the setup wizard) ----------------
+   Every time someone adds a provider they see the search first (near a ZIP, or by city and state),
+   with "Type it in myself" as the backup. After a save or a cancel, the search is shown again. */
+function AddProvider({ profile, onAdded, showAlert }) {
+  const [typing, setTyping] = useState(false);
+  const [last, setLast] = useState([]);
+  const added = list => { setLast(list.map(x => x.name)); onAdded(list); };
+  const typeBtn = <button type="button" className="btn btn-secondary" style={{ fontSize: '16px', padding: '.6rem 1rem' }} onClick={() => setTyping(true)}>&#9998; Type it in myself</button>;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.5rem', marginBottom: '.75rem' }}>
+        <p style={{ fontSize: '.88rem', margin: 0 }}>Search for the provider below, or type it in yourself.</p>
+        {typeBtn}
+      </div>
+      {last.length > 0 && <div className="alert alert-success" style={{ display: 'block' }}>Added {last.join(', ')}. Search again to add another.</div>}
+      <ProviderLookup profile={profile} showAlert={showAlert} onSave={async l => { const s = await capi.post('/api/providers/bulk', l); added(s); }} />
+      <div style={{ marginTop: '.75rem', fontSize: '.88rem' }}>Can't find it? {typeBtn}</div>
+      {typing && <ProviderModal provider={null} showAlert={showAlert} onClose={() => setTyping(false)} onSaved={s => { setTyping(false); added([s]); }} />}
     </div>
   );
 }
@@ -242,23 +296,24 @@ function CareTeamTab({ showAlert, onAskAssistant }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '.5rem' }}>
         <div className="section-title" style={{ marginBottom: 0 }}>Care Team</div>
         <div style={{ display: 'flex', gap: '.5rem' }}>
-          <button className="btn btn-secondary" onClick={() => setShowLookup(s => !s)}>{showLookup ? 'Close search' : 'Find providers near me'}</button>
-          <button className="btn btn-primary" onClick={() => setEdit({})}>+ Add Provider</button>
+          {showLookup
+            ? <button className="btn btn-secondary" onClick={() => setShowLookup(false)}>Done adding</button>
+            : <button className="btn btn-primary" onClick={() => setShowLookup(true)}>+ Add provider</button>}
         </div>
       </div>
-      {showLookup && <div className="card"><div className="card-title">Find providers near you</div><ProviderLookup profile={profile} showAlert={showAlert} onSave={async l => { await capi.post('/api/providers/bulk', l); load(); }} /></div>}
+      {showLookup && <div className="card"><div className="card-title">Add a provider</div><AddProvider profile={profile} showAlert={showAlert} onAdded={() => load()} /></div>}
       <div className="filter-bar">
         <input type="search" placeholder="Search name, department, notes..." value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
         <select value={type} onChange={e => setType(e.target.value)} style={{ width: 'auto' }}><option value="">All types</option>{Object.keys(TYPE_LABELS).map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}</select>
       </div>
       {!list ? <div className="loading"><div className="spinner" />Loading...</div> : list.length === 0 ? (
-        <div className="empty-state"><div className="empty-icon">&#128222;</div><p>No providers yet. Add your DME companies and doctors, or search for providers near you.</p></div>
+        <div className="empty-state"><div className="empty-icon">&#128222;</div><p>No providers yet. Tap <strong>+ Add provider</strong> to search near you or type one in.</p>{!showLookup && <button className="btn btn-primary" style={{ marginTop: '.75rem' }} onClick={() => setShowLookup(true)}>+ Add provider</button>}</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: '1rem' }}>
           {list.map(p => <ProviderCard key={p.id} p={p} tips={tips} onEdit={setEdit} onDelete={del} onAsk={onAskAssistant ? ask : null} onToggleFav={fav} />)}
         </div>
       )}
-      {edit && <ProviderModal provider={edit.id ? edit : null} showAlert={showAlert} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
+      {edit && edit.id && <ProviderModal provider={edit} showAlert={showAlert} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
     </div>
   );
 }
@@ -268,7 +323,6 @@ function SetupWizard({ onDone, showAlert }) {
   const [step, setStep] = useState(1);
   const [p, setP] = useState(null);
   const [added, setAdded] = useState([]);
-  const [manual, setManual] = useState(false);
   useEffect(() => { capi.get('/api/profile').then(setP); }, []);
   if (!p) return <div className="loading"><div className="spinner" />Loading...</div>;
   const set = (k, v) => setP(x => ({ ...x, [k]: v }));
@@ -300,17 +354,11 @@ function SetupWizard({ onDone, showAlert }) {
       )}
       {step === 2 && (
         <div>
-          <p style={{ fontSize: '.9rem', marginBottom: '.75rem' }}>Add your DME companies, doctors, pharmacy and nursing agency. Enter them yourself, or search near {p.city || 'you'}{p.state ? ', ' + p.state : ''} and pick the ones you use.</p>
-          <div style={{ display: 'flex', gap: '.5rem', marginBottom: '1rem' }}>
-            <button className={'btn ' + (!manual ? 'btn-primary' : 'btn-secondary')} onClick={() => setManual(false)}>Search near me</button>
-            <button className={'btn ' + (manual ? 'btn-primary' : 'btn-secondary')} onClick={() => setManual(true)}>Enter my own</button>
-          </div>
-          {!manual
-            ? <ProviderLookup profile={p} showAlert={showAlert} onSave={async l => { const s = await capi.post('/api/providers/bulk', l); setAdded(a => [...a, ...s]); }} />
-            : <ProviderModal provider={null} showAlert={showAlert} onClose={() => setManual(false)} onSaved={s => { setAdded(a => [...a, s]); setManual(false); }} />}
+          <p style={{ fontSize: '.9rem', marginBottom: '.75rem' }}>Add your DME companies, doctors, pharmacy and nursing agency, one after another. Search near you and tick the ones you use, or type one in yourself.</p>
+          <AddProvider profile={p} showAlert={showAlert} onAdded={s => setAdded(a => [...a, ...s])} />
           {added.length > 0 && (
             <div className="alert alert-success" style={{ marginTop: '1rem', display: 'block' }}>
-              Added: {added.map(a => a.name).join(', ')}
+              Your care team so far: {added.map(a => a.name).join(', ')}
             </div>
           )}
           <div className="modal-footer"><button className="btn btn-secondary" onClick={() => setStep(1)}>Back</button><button className="btn btn-primary" onClick={() => setStep(3)}>Next</button></div>

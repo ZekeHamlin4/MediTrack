@@ -13,10 +13,188 @@ web app shell and **M17** audit-log writes where each step needs them).
 | M0 Mac install, auto-start, stay awake | **Done** (needs checking on Zeke's Mac) |
 | M1 Data foundation and migration | **Done** |
 | M2 + M3 Sign-in and permission checks | **Done** (needs checking on Zeke's Mac and phone) |
-| M10 Phone access over Tailscale | Next |
+| Fix 1: nothing typed twice at first run | **Done** |
+| Fix 2: provider search by ZIP, nearest first | **Done** (needs a real-registry check on Zeke's Mac) |
+| Fix 3: search shown every time a provider is added | **Done** |
+| Reset home admin password (Mac tool) | Not started (after the 3 fixes) |
+| M10 Phone access over Tailscale | After the fixes |
 | M11 Documents | Not started |
 | M12 (email) + M18 Provider email alerts | Not started |
 | M16 Nightly encrypted backup | Not started |
+
+---
+
+## Zeke's decisions (Nov 16, after testing sign-in on his Mac)
+1. Sessions lasting **30 days from last use** are fine.
+2. **Skip the quick PIN** for now.
+3. **Yes** to a "reset admin password" tool run on the Mac. Build it as its own step **after** Fixes 1-3.
+4. Before M10, three fixes, **one at a time**, each with test steps:
+   - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
+   - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
+   - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Fix 3. The search shows every time a provider is added (done)
+
+### What was wrong
+There were four different ways to add a provider, and they didn't match:
+- **Care Team → "+ Add Provider"** opened only a blank form, with no search. This is what Zeke saw after saving one provider and adding another.
+- **Care Team → "Find providers near me"** was a separate button that opened the search without a "type it in" choice.
+- **Setup wizard, step 2:** two toggle buttons, "Search near me" and "Enter my own". After typing one in, the search came back, but the form and search swapped places, which was easy to lose track of.
+- **Editing** a provider uses the same form, which is fine; editing isn't adding.
+
+### What changed
+- **One "Add a provider" panel**, used both in Care Team and in step 2 of the setup wizard:
+  - The search is always shown first, with both choices (**Near a ZIP code**, with the ZIP from the child's profile, and **By city and state**).
+  - A **"Type it in myself"** button sits at the top, and again under the results ("Can't find it? Type it in myself"). It opens the blank form.
+  - After **saving** a typed-in provider, **cancelling** the form, or **adding** from the search results, the same panel stays open with the search. A green note says "Added … Search again to add another."
+- **Care Team** now has a single **+ Add provider** button. It opens the panel, which stays open for adding several in a row, until **Done adding**. When the list is empty, there's also a **+ Add provider** button in the middle of the page.
+- **Edit** on a provider card still opens the form with that provider's details.
+- If the child's profile loads after the panel opens, the ZIP, city and state still get filled in.
+- Files: `client/care.jsx`, `docs/build-notes.md`. No server changes.
+
+### How Zeke can test it (on the Mac)
+1. Restart MediTrack so it picks up the new version (double-click `Install MediTrack.command` again, or close and reopen the Start window).
+2. Sign in and open **Care Team**. Tap **+ Add provider**.
+3. You should see the search (**Near a ZIP code** selected, your ZIP filled in, and **By city and state** next to it) and a **Type it in myself** button.
+4. Search, tick one result, and tap **Add 1 selected to care team**. A green "Added …" note appears and the search is **still there**.
+5. Tap **Type it in myself**, type a test name (e.g. "Test Pharmacy"), and tap **Save**. The form closes and the **search is shown again**.
+6. Tap **Type it in myself** again, then **Cancel**. The search is shown again.
+7. Tap **Done adding**. Your new providers are in the list. Delete the test ones with **Delete** on their cards.
+8. Optional: on a test copy (see Fix 1's steps, port 3001), step 2 of the setup wizard shows the same panel. Add several in a row the same way.
+
+### How it was tested
+- `npm test`: 28 of 28 pass (no server code changed).
+- **Browser (headless Chrome, phone size, pretend registry, fresh install):**
+  - **Setup wizard step 2** opened with the search (ZIP 43215 filled in) and 2 "Type it in myself" buttons. Then, in a row:
+    1. search → add "Downtown DME" → search shown
+    2. type in "My Pharmacy" → Save → search shown
+    3. search → add "Dublin DME" → search shown
+    4. type in → Cancel → search shown
+    5. type in "Dr Smith" → Save → search shown
+
+    The wizard then listed all 4.
+  - **Care Team** now shows only **+ Add provider**. In a row:
+    1. it opened the search (ZIP filled in)
+    2. search → add "Big DME Co" → search shown
+    3. type in "School Nurse" → Save → search shown
+    4. type in → Cancel → search shown
+    5. **Done adding** hides the panel; **+ Add provider** opens the search again
+
+    The list had all 6 providers, and **Edit** on "Dr Smith" opened the form with that name.
+  - No page errors.
+- No automated test was added for the screen itself. The repo has no browser-test setup, and the check above needs a browser tool that only exists on the build machine. The server parts used here are already covered by `npm test`.
+
+---
+
+## Fix 2. Provider search near a ZIP, nearest first (done)
+
+Zeke approved the plan on Nov 16: **25 miles** by default with a **"Search wider (50 miles)"** button; **every office is its own row**, sorted nearest first (not grouped); **straight-line** distance between ZIP centers is fine.
+
+### What changed
+- The provider search (Care Team → "Find providers near me", and step 2 of the setup wizard) now has two buttons: **Near a ZIP code** and **By city and state**.
+  - "Near a ZIP code" is chosen first when the child's profile has a ZIP, and the ZIP is filled in from the profile.
+  - City and state search works exactly as before: same request to the registry, same results.
+- **How "nearest" works:**
+  1. MediTrack finds every ZIP within 25 miles (or 50) using a bundled list of ZIP centers.
+  2. It asks the NPI registry for those areas (by the first 3 ZIP digits, so it also crosses state lines). It asks for up to 3 pages of 200 per area.
+  3. It keeps practice offices only (a mailing address nearby doesn't count). Each office, including extra practice locations of the same provider, is its own row.
+  4. It measures straight-line miles from the center of the family's ZIP to the center of the office's ZIP, drops offices beyond the limit, and sorts nearest first.
+  5. Each row shows "about N miles" (or "less than 1 mile"). The same office returned twice is shown once.
+- **Messages:**
+  - Unknown ZIP: "We can't place ZIP … on the map (it may be a PO-box-only ZIP). Try a nearby ZIP, or search by city and state."
+  - No internet or the registry is down: "Provider search needs the internet right now … type the provider in yourself."
+  - More than 600 matches in an area: "There were more matches than MediTrack can show at once. Add a company name to narrow the search."
+- **What goes to the registry:** the ZIP's first 3 digits plus `*`, the provider type (or the company name) and page numbers. No patient information. No cost, no API key.
+- **ZIP data:** `server/data/zip-centroids.csv` (33,791 ZIP areas, about 0.9 MB), loaded when the first ZIP search runs.
+  - **Source:** US Census Bureau **2022** Gazetteer, ZIP Code Tabulation Areas national file (public domain).
+  - **Taken from** the npm package **us-zips 2022.9.1** (MIT licence, © 2021 Blake Knight), which packages that Census file. The Census website was blocked from the build machine.
+  - Source, date and licence text are in `server/data/zip-centroids-SOURCE.txt`.
+- **Files:** new `server/nearby.js`, `server/data/zip-centroids.csv`, `server/data/zip-centroids-SOURCE.txt`, `server/test/nearby.test.js`; changed `server/care.js` (new route `GET /api/lookup/nearby`, sign-in required), `client/care.jsx` (search screen).
+
+### How Zeke can test it (on the Mac, with the real registry)
+1. Restart MediTrack so it picks up the new version (double-click `Install MediTrack.command` again, or close and reopen the Start window).
+2. Sign in and open **Care Team** → **+ Add provider** (since Fix 3; it used to say "Find providers near me").
+3. **Near a ZIP code** should already be selected, with your ZIP filled in (if the child's profile has one). Otherwise type your 5-digit ZIP.
+4. Leave "Looking for" on **DME / Medical Supply** and press **Search**. Expect a list "… found within 25 miles of [ZIP], nearest first", each row with "about N miles", the closest at the top. Check that a company you know shows up near the top with the right address.
+5. Press **Search wider (50 miles)**: more results, farther ones at the bottom.
+6. Type a company you use in **Company name** (e.g. Apria) and search again. Each of its offices should be its own row, nearest first.
+7. Tick one office and press **Add 1 selected to care team**. It appears in Care Team with that office's phone and fax.
+8. Type `00000` as the ZIP and search: a plain "can't place ZIP" message.
+9. Press **By city and state**, pick your city and state, and search: it should work as before.
+10. Please tell the builder if the counts look odd (very few results, or the "more matches than MediTrack can show" message for a plain DME search).
+
+### How it was tested
+- `npm test`: **28 of 28 pass**. The 11 new tests use a pretend registry:
+  - nearest first with correct miles, offices beyond 25 miles dropped and shown at 50
+  - the 3-digit ZIP areas asked for, and only ZIP, type and paging sent
+  - a company with 3 offices (one 99 miles away, dropped) plus a branch with its own NPI: 3 separate rows, nearest first
+  - a nearby mailing address doesn't count
+  - 450 results → 3 pages and all kept; 700 results → stops at 600 and shows the "more matches" note
+  - the same office twice → shown once
+  - company name search sends the name instead of the type
+  - Cincinnati search includes northern Kentucky
+  - unknown ZIP / bad ZIP → message, nothing sent
+  - registry unreachable or HTTP error → "needs the internet" message
+  - ZIP list loads and Columbus → Cincinnati is about 100 miles
+  - **city and state search sends exactly the same request as before** and returns the same fields
+- **Do the tests catch mistakes?** Removing the 25-mile cut-off made 3 tests fail; removing the nearest-first sort made 1 fail. Both were put back.
+- **Browser (headless Chrome, phone size, pretend registry):**
+  - In the setup wizard with ZIP 43215, "Near a ZIP code" was pre-selected and the ZIP filled in.
+  - 25 miles: 4 offices, nearest first ("less than 1 mile" … "about 12 miles"). The company with two offices showed 2 rows.
+  - 50 miles: 5 rows, the farthest "about 39 miles".
+  - Ticked both offices → both added to Care Team.
+  - ZIP 00000 → message. City and state search still returns results.
+  - No page errors.
+
+### Only checkable against the real registry (uncertain until Zeke tries it)
+- The registry couldn't be reached from the build machine, so the request format is based on its documentation. Things to confirm:
+  - that a ZIP ending in `*` (e.g. `432*`) is accepted
+  - that `skip` paging works
+  - that extra offices come back as `practiceLocations`
+  - how results look when a ZIP search matches mailing addresses (we filter those out)
+- If the wildcard isn't accepted, the search will show the "registry" error message. The fix would be to ask by exact 5-digit ZIPs instead.
+- Speed: a 25-mile search makes about 3 to 10 registry requests (4 at a time). It should take a few seconds; untested on a real connection.
+- ZIP data is from 2022. New ZIPs since then show the "can't place ZIP" message.
+- Straight-line distance between ZIP centers is accurate to a few miles. Mail-order DME companies with no nearby office won't rank as near.
+
+---
+
+## Fix 1. Nothing typed twice at first run (done)
+
+### What was typed twice
+I compared the account form (first run) with the child's setup screens:
+- **Account form:** setup code, your name, title, email, password, 18+.
+- **Setup wizard step 1 (new installs):** child's name, birth date, **your name**, your phone, **your email**, address, insurance, diagnoses, equipment.
+- **"Check your child's details" (upgraded installs):** first name, last name, birth date. These come already filled from the old profile; nothing is retyped.
+
+So the repeats were **"Your name"** and **"Your email"**.
+
+### What changed
+- When the home admin account is created, MediTrack copies its name and email into the child's profile ("Your name", "Your email"). The wizard now shows them **already filled in**, and they can still be changed there.
+- It **never overwrites** something already in the profile. On an upgraded install, an existing parent name stays; only empty fields are filled.
+- Title ("Dad") isn't asked on the child's screens, so there's nothing to copy.
+- Files: `server/auth.js`, `server/test/auth.test.js`.
+
+### How Zeke can test it (on the Mac, without touching his real data)
+His real MediTrack is already set up, so try it on a throw-away test copy:
+1. Open **Terminal** (Applications → Utilities → Terminal).
+2. Type `cd ` (with a space), drag the MediTrack **server** folder onto the Terminal window, and press Return.
+3. Paste this and press Return:
+   `MEDITRACK_DB_PATH=/tmp/mt-test.db PORT=3001 node index.js`
+   The window shows a **setup code** (a notification also appears). Your real MediTrack keeps running; this test copy uses port 3001 and a separate test database.
+4. In the browser, open `http://localhost:3001`. Enter the code, your name, email and a password, tick 18+, then **Create my account**. Tap **Done** on the checklist.
+5. On "Welcome to MediTrack, step 1", **Your name** and **Your email** should already be filled in with what you just typed.
+6. When finished, go back to Terminal and press **Control + C**. Then paste `rm /tmp/mt-test.db*` and press Return to delete the test copy.
+
+### How it was tested
+- `npm test`: **17 of 17 pass**. New checks: after setup, the profile has the account's name and email; on a profile that already has a parent name, the name is kept and only the empty email is filled.
+- Headless Chrome, **fresh install**: the wizard opened with "Your name" = the account name and "Your email" = the account email, "Your phone" empty. The wizard finished and the app loaded with no page errors.
+- Headless Chrome, **upgraded pre-M1 database**: the full flow still works (child details, all tabs, adding a nurse, nurse sign-in), with no page errors. Afterwards the profile kept its old parent name "Test Parent" and gained the account email in the empty "Your email" field.
+
+### Known gaps
+- Zeke's real install was set up before this fix, so his profile isn't filled in after the fact. He can type his email once in the profile if it's empty.
 
 ---
 

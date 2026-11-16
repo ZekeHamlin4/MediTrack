@@ -1,0 +1,33 @@
+zip-centroids.csv: the map point at the center of each US ZIP code area (ZCTA).
+
+Used by MediTrack's "search near a ZIP" provider search (server/nearby.js). Offline; nothing is sent anywhere.
+
+Source data: US Census Bureau, 2022 Gazetteer Files, ZIP Code Tabulation Areas (ZCTA) national file,
+https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2022_Gazetteer/2022_Gaz_zcta_national.zip
+(US government work, public domain).
+
+Converted from the npm package us-zips 2022.9.1 (https://github.com/blakek/us-zips), which packages that
+Census file. Only ZIP, latitude and longitude are kept (33,791 ZIP areas). Its licence follows.
+
+---------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2021 Blake Knight
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

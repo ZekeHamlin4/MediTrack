@@ -4,7 +4,7 @@ A home app for families caring for a medically complex child. It covers:
 
 - **Care Team directory**: every DME company, doctor, specialist, pharmacy, nursing agency, therapist and insurer, with phone, fax, email, account numbers and department numbers (e.g. "Resupply, press 2"). Tap to call or copy any number.
 - **"What to say" guides**: for each type of provider, what to have ready, a call script, and tips.
-- **Setup wizard**: on first launch, enter your family info, then either type in your providers or **search by city/state** in the free national NPI registry (it returns phone and fax numbers) and tick the ones you use.
+- **Setup wizard**: on first launch, enter your family info, then either type in your providers or search the free national NPI registry **near your ZIP code** (nearest offices first, with distances) or **by city/state**. It returns phone and fax numbers; tick the ones you use.
 - **Care Assistant (AI)** (*switched off for now; it comes back with its privacy switches and a $10/month limit*): chat with it like a helper, for example:
   - "Email our DME company and request a new feeding pump backpack"
   - "Check my email for anything from our providers that needs a reply"

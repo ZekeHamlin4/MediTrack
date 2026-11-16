@@ -122,6 +122,17 @@ function addToAllPatients(userId, { asAdmin = false } = {}) {
   }
 }
 
+// So nothing is typed twice: the child's profile asks "Your name" and "Your email", which the
+// account form already asked. Copy them into the profile, but never overwrite something already there.
+function prefillParentFromAccount(userId) {
+  const u = db.prepare('SELECT name, email FROM users WHERE id = ?').get(userId);
+  db.prepare(`UPDATE patients SET
+      parent_name = CASE WHEN TRIM(COALESCE(parent_name, '')) = '' THEN ? ELSE parent_name END,
+      parent_email = CASE WHEN TRIM(COALESCE(parent_email, '')) = '' THEN ? ELSE parent_email END
+    WHERE id IN (SELECT patient_id FROM patient_members WHERE user_id = ? AND is_patient_admin = 1)`)
+    .run(u.name, u.email, userId);
+}
+
 // ---------- middleware ----------
 // Same-origin check for anything that can change data (also blocks sign-in from other websites).
 function sameOrigin(req, res, next) {
@@ -231,6 +242,7 @@ setupRouter.post('/setup', wrap(async (req, res) => {
   if (!needsSetup()) throw fail(409, 'MediTrack is already set up. Please sign in.');
   const userId = saveAccount({ name, title, email: em, hash, isHomeAdmin: true, mustChange: false });
   addToAllPatients(userId, { asAdmin: true });
+  prefillParentFromAccount(userId);
   setupCode = null;
   db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(nowIso(), userId);
   db.audit('home_admin_created', { userId });
@@ -387,6 +399,6 @@ module.exports = {
   // routers
   setupRouter, authRouter, adminRouter,
   // helpers
-  prepareSetupCode, needsSetup, hashPassword, verifyPassword, getSetupCode: () => setupCode,
+  prepareSetupCode, needsSetup, prefillParentFromAccount, hashPassword, verifyPassword, getSetupCode: () => setupCode,
   SESSION_DAYS, MAX_FAILS, LOCK_MINUTES, COOKIE,
 };
