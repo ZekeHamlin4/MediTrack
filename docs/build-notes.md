@@ -19,6 +19,7 @@ web app shell and **M17** audit-log writes where each step needs them).
 | Reset home admin password (Mac tool) | **Done** (needs checking on Zeke's Mac) |
 | Company name searches all types | **Done** |
 | M10 Phone access over Tailscale + M13 web app shell | **Done** (needs setting up and checking on Zeke's Mac and iPhone) |
+| Bug fix: Scan → Start Camera on iPhone | **Done** (needs checking on Zeke's iPhone) |
 | M11 Documents | Next |
 | M12 (email) + M18 Provider email alerts | Not started |
 | M16 Nightly encrypted backup | Not started |
@@ -33,6 +34,78 @@ web app shell and **M17** audit-log writes where each step needs them).
    - Fix 1: nothing should be entered twice at first run; prefill what MediTrack already knows.
    - Fix 2: provider search by ZIP, nearest locations first. Zeke approves how "nearest" works **before** it's built.
    - Fix 3: after saving a provider, "add another" should show the search again, with "type it in myself" as a backup.
+
+---
+
+## Bug fix: Scan → Start Camera did nothing on iPhone (done, Nov 18)
+
+### Root cause (Zeke's diagnosis was right)
+The Scan screen told the barcode scanner (Quagga) to show the camera in a box found by `getElementById('qvp')`. But that box was only put on the page **after** the scanner had started, and the scanner can't start without the box.
+- The scanner got **nothing** (`null`), had nowhere to put the camera picture, and crashed with a hidden error (`Cannot read properties of undefined (reading 'setAttribute')`).
+- No message was shown, and the button stayed on "Start Camera".
+- I reproduced exactly this with the old code in an iPhone-sized browser with a pretend camera: target `null`, no video, that page error.
+- Side problems in the same code:
+  - the page's camera styles pointed at a different id (`#quagga-viewport`), so they never applied
+  - every Start added another "barcode found" listener
+  - the camera's own tracks were never stopped by MediTrack itself
+
+### What changed
+- **New `client/scanner.jsx` (`CameraScanner`)**, used by the Scan screen:
+  - The camera box is **always on the page** (hidden until needed).
+  - **Start Camera** first shows the box ("Starting camera…"). The scanner is started only after the box is on screen, and gets it through a **React ref**, not by looking it up.
+  - Asks for the **rear camera** (`facingMode: environment`).
+  - Supplies its own `<video>` with **`playsinline`, `muted` and `autoplay`** already set, so iPhones show the camera inside the page instead of full screen or black.
+  - Stops cleanly. The listener is removed, the scanner stopped, and **every camera track** stopped (the camera light goes off). This happens on **Stop Camera**, after a **barcode is found**, when **leaving the Scan screen**, and when the app **goes to the background**.
+  - **Start Camera works again** after a stop or a failure, without reloading. A start that finishes after you pressed Stop is ignored.
+  - A found barcode fills the Manual Entry box and looks the supply up, as before.
+- **New `client/camera-errors.js`:** plain messages for each problem.
+  - **Permission denied:** how to allow it on iPhone (Safari **aA** button → Website Settings → Camera → Allow, or iPhone Settings → Safari → Camera; for the Home Screen app, close and reopen MediTrack).
+  - **No camera found.**
+  - **Camera in use by another app.**
+  - **Insecure address:** plain `http://` over Wi-Fi, where iPhones block the camera. "Use the https:// Tailscale address." This is checked before asking for the camera.
+  - **Browser can't use the camera**, **camera showed no picture**, and any **other error** (with "try again").
+- `client/index.html`: Scan screen uses `<CameraScanner>`; loads `camera-errors.js` and `scanner.jsx`; camera styles fixed.
+- `server/app.js`: `.js` files are also sent with `no-cache`, so phones get updates.
+- **Other places with the same pattern:** none. The only other `getElementById` is the app's root element, and no other screen starts a library on an element. The service worker and Phone access card don't use page elements this way.
+- Files:
+  - new: `client/scanner.jsx`, `client/camera-errors.js`, `server/test/camera.test.js`
+  - changed: `client/index.html`, `server/app.js`, `docs/build-notes.md`
+
+### How Zeke tests it on the iPhone
+Use the MediTrack **Home Screen icon** (or Safari) on the **https://…ts.net** Tailscale address.
+1. Open **Scan** → **Start Camera**. The first time, the iPhone asks to use the camera: tap **Allow**.
+2. The rear camera picture appears **inside the page** (not full screen), with a blue box. Point it at a supply barcode. When found, the camera turns off and the supply appears below. (If the code isn't in your supply list you'll see "Not found".)
+3. Tap **Start Camera** again, then **Stop Camera**. The picture disappears and the green camera dot at the top of the screen goes away within a second or two.
+4. Start the camera and switch to the **Supplies** tab. The camera turns off.
+5. **Test the "not allowed" message:**
+   - In Safari: tap **aA** in the address bar → **Website Settings** → **Camera** → **Deny**.
+   - For the Home Screen icon: iPhone **Settings** → **Safari** → **Camera** → **Deny**, then swipe MediTrack closed and reopen it.
+   - Then tap **Start Camera**: a red message explains how to allow it.
+6. **Re-allow the camera:** same place, choose **Allow** (or **Ask**). For the Home Screen icon, close and reopen MediTrack. Tap **Start Camera**: it works again.
+7. Optional: on the plain Wi-Fi address (`http://…:3000`, only if Home Wi-Fi mode is on), **Start Camera** shows the "only works on the secure address" message.
+
+### How it was tested
+- `npm test`: **48 of 48 pass** (2 new):
+  - every camera message (denied, no camera, in use, insecure, unsupported, no picture, other)
+  - the Scan screen loads the fixed scanner and no longer looks up a camera box by id; the scanner uses a ref, the rear camera, `playsinline`, and stops tracks and listeners
+- **Browser: Chrome emulating an iPhone 13 (390 px, iPhone user agent) with a pretend camera:**
+  - **Old code:** target `null`, no video, page error. Root cause confirmed.
+  - **New code:**
+    - the scanner got the `cam-target` box; one `<video>` with `playsinline` and `muted`, playing at 1280×720, shown inside the page; the camera was asked for the rear camera; 1 live camera track
+    - **Stop:** 0 live tracks, box hidden. **Start again** without reload: on, 1 track.
+    - **A barcode found** (handed to the scanner, since the pretend camera shows no barcode): it found "Suction Catheter 8Fr", the camera stopped (0 tracks) and the button went back to Start Camera
+    - **Leaving the Scan tab while on:** 0 tracks
+    - **Denied / in use / no camera:** each showed its message, and Start Camera worked again afterwards with the message gone
+    - **Insecure address:** the message was shown and the camera was never asked for
+    - **Real browser refusal** (no camera permission given): the "not allowed" message
+    - no page errors
+- The pretend camera can't show a real barcode, so actual barcode reading was not tested here.
+
+### Only checkable on a real iPhone
+- That the camera picture shows inline (not full screen or black) in Safari and in the Home Screen app.
+- Real barcode reading with the rear camera.
+- The exact iOS menu names for camera permission (**aA → Website Settings**, **Settings → Safari → Camera**), and whether the Home Screen app needs closing and reopening after a change.
+- That the camera turns off when MediTrack goes to the background.
 
 ---
 

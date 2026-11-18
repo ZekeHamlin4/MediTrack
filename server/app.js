@@ -22,7 +22,7 @@ app.get('/sw.js', (req, res) => {
   res.set({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache, no-store', 'Service-Worker-Allowed': '/' });
   res.send(src.replace('__VERSION__', version));
 });
-app.use(express.static(CLIENT, { setHeaders: (res, file) => { if (/\.(html|jsx|webmanifest)$/.test(file)) res.set('Cache-Control', 'no-cache'); } }));
+app.use(express.static(CLIENT, { setHeaders: (res, file) => { if (/\.(html|jsx|js|webmanifest)$/.test(file)) res.set('Cache-Control', 'no-cache'); } }));
 
 // Every API call: same-origin check for changes, then read the session cookie.
 app.use('/api', auth.sameOrigin, auth.loadSession);
